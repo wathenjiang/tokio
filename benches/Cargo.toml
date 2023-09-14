@@ -84,3 +84,8 @@ harness = false
 name = "time_now"
 path = "time_now.rs"
 harness = false
+
+[[bench]]
+name = "sleep"
+path = "sleep.rs"
+harness = false
