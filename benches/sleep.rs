@@ -24,7 +24,7 @@ fn sleep_accuracy(c: &mut Criterion, rt : Runtime, bench_id: &str) {
             let start:Instant = Instant::now();
             rt.block_on(async {
                 for _ in 0..iters {
-                    tokio::time::sleep(tokio::time::Duration::from_micros(black_box(50))).await;
+                    tokio::time::sleep(tokio::time::Duration::from_millis(black_box(10))).await;
                 }
                 start.elapsed()
             })
