@@ -138,9 +138,6 @@ pub(super) struct Core<T: Future, S> {
     /// Scheduler used to drive this future.
     pub(super) scheduler: S,
 
-    /// The task's ID, used for populating `JoinError`s.
-    pub(super) task_id: Id,
-
     /// Either the future or the output.
     pub(super) stage: CoreStage<T>,
 }
@@ -243,7 +240,6 @@ impl<T: Future, S: Schedule> Cell<T, S> {
                 stage: CoreStage {
                     stage: UnsafeCell::new(Stage::Running(future)),
                 },
-                task_id,
             },
             trailer: Trailer::new(),
         });
@@ -251,7 +247,7 @@ impl<T: Future, S: Schedule> Cell<T, S> {
         #[cfg(debug_assertions)]
         {
             // Using a separate function for this code avoids instantiating it separately for every `T`.
-            unsafe fn check<S>(header: &Header, trailer: &Trailer, scheduler: &S, task_id: &Id) {
+            unsafe fn check<S>(header: &Header, trailer: &Trailer, scheduler: &S) {
                 let trailer_addr = trailer as *const Trailer as usize;
                 let trailer_ptr = unsafe { Header::get_trailer(NonNull::from(header)) };
                 assert_eq!(trailer_addr, trailer_ptr.as_ptr() as usize);
@@ -259,18 +255,9 @@ impl<T: Future, S: Schedule> Cell<T, S> {
                 let scheduler_addr = scheduler as *const S as usize;
                 let scheduler_ptr = unsafe { Header::get_scheduler::<S>(NonNull::from(header)) };
                 assert_eq!(scheduler_addr, scheduler_ptr.as_ptr() as usize);
-
-                let id_addr = task_id as *const Id as usize;
-                let id_ptr = unsafe { Header::get_id_ptr(NonNull::from(header)) };
-                assert_eq!(id_addr, id_ptr.as_ptr() as usize);
             }
             unsafe {
-                check(
-                    &result.header,
-                    &result.trailer,
-                    &result.core.scheduler,
-                    &result.core.task_id,
-                );
+                check(&result.header, &result.trailer, &result.core.scheduler);
             }
         }
 
@@ -318,7 +305,7 @@ impl<T: Future, S: Schedule> Core<T, S> {
     ///
     /// `self` must also be pinned. This is handled by storing the task on the
     /// heap.
-    pub(super) fn poll(&self, mut cx: Context<'_>) -> Poll<T::Output> {
+    pub(super) fn poll(&self, mut cx: Context<'_>, task_id: Id) -> Poll<T::Output> {
         let res = {
             self.stage.stage.with_mut(|ptr| {
                 // Safety: The caller ensures mutual exclusion to the field.
@@ -330,13 +317,13 @@ impl<T: Future, S: Schedule> Core<T, S> {
                 // Safety: The caller ensures the future is pinned.
                 let future = unsafe { Pin::new_unchecked(future) };
 
-                let _guard = TaskIdGuard::enter(self.task_id);
+                let _guard = TaskIdGuard::enter(task_id);
                 future.poll(&mut cx)
             })
         };
 
         if res.is_ready() {
-            self.drop_future_or_output();
+            self.drop_future_or_output(task_id);
         }
 
         res
@@ -347,10 +334,10 @@ impl<T: Future, S: Schedule> Core<T, S> {
     /// # Safety
     ///
     /// The caller must ensure it is safe to mutate the `stage` field.
-    pub(super) fn drop_future_or_output(&self) {
+    pub(super) fn drop_future_or_output(&self, task_id: Id) {
         // Safety: the caller ensures mutual exclusion to the field.
         unsafe {
-            self.set_stage(Stage::Consumed);
+            self.set_stage(Stage::Consumed, task_id);
         }
     }
 
@@ -359,10 +346,10 @@ impl<T: Future, S: Schedule> Core<T, S> {
     /// # Safety
     ///
     /// The caller must ensure it is safe to mutate the `stage` field.
-    pub(super) fn store_output(&self, output: super::Result<T::Output>) {
+    pub(super) fn store_output(&self, output: super::Result<T::Output>, task_id: Id) {
         // Safety: the caller ensures mutual exclusion to the field.
         unsafe {
-            self.set_stage(Stage::Finished(output));
+            self.set_stage(Stage::Finished(output), task_id);
         }
     }
 
@@ -383,8 +370,8 @@ impl<T: Future, S: Schedule> Core<T, S> {
         })
     }
 
-    unsafe fn set_stage(&self, stage: Stage<T>) {
-        let _guard = TaskIdGuard::enter(self.task_id);
+    unsafe fn set_stage(&self, stage: Stage<T>, task_id: Id) {
+        let _guard = TaskIdGuard::enter(task_id);
         self.stage.stage.with_mut(|ptr| *ptr = stage)
     }
 }

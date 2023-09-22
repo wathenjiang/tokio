@@ -205,7 +205,7 @@ where
                 let header_ptr = self.header_ptr();
                 let waker_ref = waker_ref::<S>(&header_ptr);
                 let cx = Context::from_waker(&waker_ref);
-                let res = poll_future(self.core(), cx);
+                let res = poll_future(self.core(), cx, self.header().task_id);
 
                 if res == Poll::Ready(()) {
                     // The future completed. Move on to complete the task.
@@ -216,12 +216,12 @@ where
                 if let TransitionToIdle::Cancelled = transition_res {
                     // The transition to idle failed because the task was
                     // cancelled during the poll.
-                    cancel_task(self.core());
+                    cancel_task(self.core(), self.header().task_id);
                 }
                 transition_result_to_poll_future(transition_res)
             }
             TransitionToRunning::Cancelled => {
-                cancel_task(self.core());
+                cancel_task(self.core(), self.header().task_id);
                 PollFuture::Complete
             }
             TransitionToRunning::Failed => PollFuture::Done,
@@ -244,7 +244,7 @@ where
 
         // By transitioning the lifecycle to `Running`, we have permission to
         // drop the future.
-        cancel_task(self.core());
+        cancel_task(self.core(), self.header().task_id);
         self.complete();
     }
 
@@ -296,7 +296,7 @@ where
             // they are dropping the `JoinHandle`, we assume they are not
             // interested in the panic and swallow it.
             let _ = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-                self.core().drop_future_or_output();
+                self.core().drop_future_or_output(self.header().task_id);
             }));
         }
 
@@ -320,7 +320,7 @@ where
                 // The `JoinHandle` is not interested in the output of
                 // this task. It is our responsibility to drop the
                 // output.
-                self.core().drop_future_or_output();
+                self.core().drop_future_or_output(self.header().task_id);
             } else if snapshot.is_join_waker_set() {
                 // Notify the waker. Reading the waker field is safe per rule 4
                 // in task/mod.rs, since the JOIN_WAKER bit is set and the call
@@ -447,13 +447,13 @@ enum PollFuture {
 }
 
 /// Cancels the task and store the appropriate error in the stage field.
-fn cancel_task<T: Future, S: Schedule>(core: &Core<T, S>) {
+fn cancel_task<T: Future, S: Schedule>(core: &Core<T, S>, task_id: Id) {
     // Drop the future from a panic guard.
     let res = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-        core.drop_future_or_output();
+        core.drop_future_or_output(task_id);
     }));
 
-    core.store_output(Err(panic_result_to_join_error(core.task_id, res)));
+    core.store_output(Err(panic_result_to_join_error(task_id, res)), task_id);
 }
 
 fn panic_result_to_join_error(
@@ -468,21 +468,26 @@ fn panic_result_to_join_error(
 
 /// Polls the future. If the future completes, the output is written to the
 /// stage field.
-fn poll_future<T: Future, S: Schedule>(core: &Core<T, S>, cx: Context<'_>) -> Poll<()> {
+fn poll_future<T: Future, S: Schedule>(
+    core: &Core<T, S>,
+    cx: Context<'_>,
+    task_id: Id,
+) -> Poll<()> {
     // Poll the future.
     let output = panic::catch_unwind(panic::AssertUnwindSafe(|| {
         struct Guard<'a, T: Future, S: Schedule> {
+            task_id: Id,
             core: &'a Core<T, S>,
         }
         impl<'a, T: Future, S: Schedule> Drop for Guard<'a, T, S> {
             fn drop(&mut self) {
                 // If the future panics on poll, we drop it inside the panic
                 // guard.
-                self.core.drop_future_or_output();
+                self.core.drop_future_or_output(self.task_id);
             }
         }
-        let guard = Guard { core };
-        let res = guard.core.poll(cx);
+        let guard = Guard { core, task_id };
+        let res = guard.core.poll(cx, task_id);
         mem::forget(guard);
         res
     }));
@@ -491,12 +496,12 @@ fn poll_future<T: Future, S: Schedule>(core: &Core<T, S>, cx: Context<'_>) -> Po
     let output = match output {
         Ok(Poll::Pending) => return Poll::Pending,
         Ok(Poll::Ready(output)) => Ok(output),
-        Err(panic) => Err(panic_to_error(&core.scheduler, core.task_id, panic)),
+        Err(panic) => Err(panic_to_error(&core.scheduler, task_id, panic)),
     };
 
     // Catch and ignore panics if the future panics on drop.
     let res = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-        core.store_output(output);
+        core.store_output(output, task_id);
     }));
 
     if res.is_err() {
