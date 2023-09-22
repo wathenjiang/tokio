@@ -1282,7 +1282,7 @@ cfg_rt_multi_thread! {
             use crate::runtime::scheduler::{self, MultiThread};
 
             let core_threads = self.worker_threads.unwrap_or_else(num_cpus);
-            let spawn_concurrency_level = self.spawn_concurrency_level.unwrap_or(core_threads * 2);
+            let spawn_concurrency_level = self.spawn_concurrency_level.unwrap_or(core_threads * 8);
 
             let (driver, driver_handle) = driver::Driver::new(self.get_cfg())?;
 
