@@ -146,14 +146,14 @@ impl<S: 'static> OwnedTasks<S> {
 
     /// Shuts down all tasks in the collection. This call also closes the
     /// collection, preventing new items from being added.
-    pub(crate) fn close_and_shutdown_all(&self, start: usize)
+    pub(crate) fn close_and_shutdown_all(&self, _start: usize)
     where
         S: Schedule,
     {
         self.closed.store(true, Ordering::Release);
-        for i in start..self.segment_size as usize + start {
+        for i in 0 .. self.segment_size {
             loop {
-                let mut lock = self.segment_inner(i);
+                let mut lock = self.segment_inner(i as usize);
                 let task = match lock.pop_back() {
                     Some(task) => {
                         drop(lock);
