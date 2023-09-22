@@ -58,6 +58,8 @@ struct OwnedTasksInner<S: 'static> {
     closed: bool,
 }
 
+const NEIGHBOR : usize = 2;
+
 impl<S: 'static> OwnedTasks<S> {
     pub(crate) fn new(concurrency_level: u32) -> Self {
         // Find power-of-two sizes best matching arguments
@@ -65,7 +67,7 @@ impl<S: 'static> OwnedTasks<S> {
         while segment_size < concurrency_level {
             segment_size <<= 1;
         }
-        let segment_mask = segment_size - 1;
+        let segment_mask = segment_size * NEIGHBOR as u32- 1;
 
         let mut lists = Vec::with_capacity(segment_size as usize);
         for _ in 0..segment_size {
@@ -198,7 +200,7 @@ impl<S: 'static> OwnedTasks<S> {
 
     #[inline]
     fn segment_inner(&self, id: usize) -> MutexGuard<'_, ListSement<S>> {
-        self.lists[id & (self.segment_mask) as usize].lock()
+        self.lists[(id & (self.segment_mask) as usize) / NEIGHBOR].lock()
     }
 
     pub(crate) fn is_closed(&self) -> bool {
