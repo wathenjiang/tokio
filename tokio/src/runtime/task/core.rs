@@ -17,7 +17,7 @@ use crate::runtime::task::state::State;
 use crate::runtime::task::{Id, Schedule};
 use crate::util::linked_list;
 
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroU64};
 use std::pin::Pin;
 use std::ptr::NonNull;
 use std::task::{Context, Poll, Waker};
@@ -157,8 +157,8 @@ pub(crate) struct Header {
     /// Table of function pointers for executing actions on the task.
     pub(super) vtable: &'static Vtable,
 
-    /// This integer contains the id of the OwnedTasks or LocalOwnedTasks that
-    /// this task is stored in. If the task is not in any list, should be the
+    /// The lower 32 bits of this value is the id of OwnedTasks, and higher 32 bits of this value is
+    /// the segment id of inner segment list of OwnedTasks. If the task is not in any list, should be the
     /// id of the list that it was previously in, or `None` if it has never been
     /// in any list.
     ///
@@ -168,14 +168,11 @@ pub(crate) struct Header {
     /// The id is not unset when removed from a list because we want to be able
     /// to read the id without synchronization, even if it is concurrently being
     /// removed from the list.
-    pub(super) owner_id: UnsafeCell<Option<NonZeroU32>>,
+    pub(super) owner_id: UnsafeCell<Option<NonZeroU64>>,
 
     /// The tracing ID for this instrumented task.
     #[cfg(all(tokio_unstable, feature = "tracing"))]
     pub(super) tracing_id: Option<tracing::Id>,
-
-    /// The task's ID, is used for deciding which list to put it in.
-    pub(super) task_id: Id,
 }
 
 unsafe impl Send for Header {}
@@ -213,14 +210,12 @@ impl<T: Future, S: Schedule> Cell<T, S> {
         fn new_header(
             state: State,
             vtable: &'static Vtable,
-            task_id: Id,
             #[cfg(all(tokio_unstable, feature = "tracing"))] tracing_id: Option<tracing::Id>,
         ) -> Header {
             Header {
                 state,
                 queue_next: UnsafeCell::new(None),
                 vtable,
-                task_id,
                 owner_id: UnsafeCell::new(None),
                 #[cfg(all(tokio_unstable, feature = "tracing"))]
                 tracing_id,
@@ -234,7 +229,6 @@ impl<T: Future, S: Schedule> Cell<T, S> {
             header: new_header(
                 state,
                 vtable,
-                task_id,
                 #[cfg(all(tokio_unstable, feature = "tracing"))]
                 tracing_id,
             ),
@@ -395,16 +389,35 @@ impl Header {
     }
 
     // safety: The caller must guarantee exclusive access to this field, and
-    // must ensure that the id is either `None` or the id of the OwnedTasks
+    // must ensure that the owner_id is either `None` or the owner_id of the OwnedTasks
     // containing this task.
-    pub(super) unsafe fn set_owner_id(&self, owner: NonZeroU32) {
-        self.owner_id.with_mut(|ptr| *ptr = Some(owner));
+    pub(super) unsafe fn set_owner(&self, owner_id: NonZeroU32, segment_id: u32) {
+        let low: u64 = owner_id.get() as u64;
+        let high: u64 = segment_id as u64;
+        self.owner_id
+            .with_mut(|ptr| *ptr = NonZeroU64::new((high << 32) | low));
     }
 
     pub(super) fn get_owner_id(&self) -> Option<NonZeroU32> {
         // safety: If there are concurrent writes, then that write has violated
         // the safety requirements on `set_owner_id`.
-        unsafe { self.owner_id.with(|ptr| *ptr) }
+        unsafe {
+            self.owner_id.with(|ptr| match *ptr {
+                Some(num) => return NonZeroU32::new((num.get() & 0xFFFF_FFFF) as u32),
+                None => return None,
+            })
+        }
+    }
+
+    pub(super) fn get_segment_id(&self) -> Option<u32> {
+        // safety: If there are concurrent writes, then that write has violated
+        // the safety requirements on `set_segment_id`.
+        unsafe {
+            self.owner_id.with(|ptr| match *ptr {
+                Some(num) => return Some((num.get() >> 32) as u32),
+                None => return None,
+            })
+        }
     }
 
     /// Gets a pointer to the `Trailer` of the task containing this `Header`.

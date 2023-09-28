@@ -95,29 +95,27 @@ impl<S: 'static> OwnedTasks<S> {
         T::Output: Send + 'static,
     {
         let (task, notified, join) = super::new_task(task, scheduler, id);
-        let notified = unsafe { self.bind_inner(task, notified) };
+        let notified = unsafe { self.bind_inner(task, notified, id) };
         (join, notified)
     }
 
     /// The part of `bind` that's the same for every type of future.
-    unsafe fn bind_inner(&self, task: Task<S>, notified: Notified<S>) -> Option<Notified<S>>
+    unsafe fn bind_inner(
+        &self,
+        task: Task<S>,
+        notified: Notified<S>,
+        task_id: super::Id,
+    ) -> Option<Notified<S>>
     where
         S: Schedule,
     {
+        let (mut lock, index) = self.segment_inner(task_id.0 as usize);
         unsafe {
             // safety: We just created the task, so we have exclusive access
             // to the field.
-            task.header().set_owner_id(self.id);
+            task.header().set_owner(self.id, index as u32);
         }
-        self.push_inner(task, notified)
-    }
 
-    #[inline]
-    pub(crate) fn push_inner(&self, task: Task<S>, notified: Notified<S>) -> Option<Notified<S>>
-    where
-        S: Schedule,
-    {
-        let mut lock = self.segment_inner(task.task_id() as usize);
         // check close flag,
         // it must be checked in the lock, for ensuring all tasks will shutdown after OwnedTasks has been closed
         if self.closed.load(Ordering::Acquire) {
@@ -128,6 +126,7 @@ impl<S: 'static> OwnedTasks<S> {
         lock.push_front(task);
         drop(lock);
         self.count.fetch_add(1, Ordering::Relaxed);
+
         Some(notified)
     }
 
@@ -157,7 +156,7 @@ impl<S: 'static> OwnedTasks<S> {
         self.closed.store(true, Ordering::Release);
         for i in start..self.segment_size as usize + start {
             loop {
-                let mut lock = self.segment_inner(i);
+                let (mut lock, _) = self.segment_inner(i);
                 match lock.pop_back() {
                     Some(task) => {
                         drop(lock);
@@ -180,24 +179,20 @@ impl<S: 'static> OwnedTasks<S> {
         let task_id = task.header().get_owner_id()?;
 
         assert_eq!(task_id, self.id);
-
+        // safety: unwrap here is safe, we just ensure that task_id is not None, so the segment_id must not be None
+        let (mut lock, _) = self.segment_inner(task.header().get_segment_id().unwrap() as usize);
         // safety: We just checked that the provided task is not in some other
         // linked list.
-        unsafe { self.remove_inner(task) }
-    }
-
-    #[inline]
-    unsafe fn remove_inner(&self, task: &Task<S>) -> Option<Task<S>> {
-        let mut lock = self.segment_inner(task.task_id() as usize);
-        let task = lock.remove(task.header_ptr())?;
+        let task = unsafe { lock.remove(task.header_ptr())? };
         drop(lock);
         self.count.fetch_sub(1, Ordering::Relaxed);
         Some(task)
     }
 
     #[inline]
-    fn segment_inner(&self, id: usize) -> MutexGuard<'_, ListSement<S>> {
-        self.lists[id & (self.segment_mask) as usize].lock()
+    fn segment_inner(&self, id: usize) -> (MutexGuard<'_, ListSement<S>>, usize) {
+        let index = id & (self.segment_mask) as usize;
+        (self.lists[index].lock(), index)
     }
 
     pub(crate) fn is_closed(&self) -> bool {
@@ -251,7 +246,7 @@ impl<S: 'static> LocalOwnedTasks<S> {
         unsafe {
             // safety: We just created the task, so we have exclusive access
             // to the field.
-            task.header().set_owner_id(self.id);
+            task.header().set_owner(self.id, 0);
         }
 
         if self.is_closed() {
