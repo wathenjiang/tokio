@@ -1,8 +1,10 @@
-use super::{Pop, Synced};
+use super::{Pop, Synced, Synced2};
 
 use crate::loom::sync::atomic::AtomicUsize;
+use crate::runtime::scheduler::inject::pop::Pop2;
 use crate::runtime::task;
 
+use std::collections::LinkedList;
 use std::marker::PhantomData;
 use std::sync::atomic::Ordering::{Acquire, Release};
 
@@ -18,7 +20,7 @@ unsafe impl<T> Send for Shared<T> {}
 unsafe impl<T> Sync for Shared<T> {}
 
 impl<T: 'static> Shared<T> {
-    pub(crate) fn new() -> (Shared<T>, Synced) {
+    pub(crate) fn new() -> (Shared<T>, Synced, Synced2) {
         let inject = Shared {
             len: AtomicUsize::new(0),
             _p: PhantomData,
@@ -30,7 +32,13 @@ impl<T: 'static> Shared<T> {
             tail: None,
         };
 
-        (inject, synced)
+        let synced2 = Synced2 {
+            is_closed: false,
+            list: LinkedList::new(),
+            current: None,
+        };
+
+        (inject, synced, synced2)
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -92,6 +100,17 @@ impl<T: 'static> Shared<T> {
         self.len.store(len + 1, Release);
     }
 
+    pub(crate) unsafe fn push2(&self, synced2: &mut Synced2, task: task::Notified<T>) {
+        if synced2.is_closed {
+            return;
+        }
+        // safety: only mutated with the lock held
+        let len = self.len.unsync_load();
+        let task = task.into_raw();
+        synced2.push(task);
+        self.len.store(len + 1, Release);
+    }
+
     /// Pop a value from the queue.
     ///
     /// # Safety
@@ -99,6 +118,10 @@ impl<T: 'static> Shared<T> {
     /// Must be called with the same `Synced` instance returned by `Inject::new`
     pub(crate) unsafe fn pop(&self, synced: &mut Synced) -> Option<task::Notified<T>> {
         self.pop_n(synced, 1).next()
+    }
+
+    pub(crate) unsafe fn pop2(&self, synced2: &mut Synced2) -> Option<task::Notified<T>> {
+        self.pop_n2(synced2, 1).next()
     }
 
     /// Pop `n` values from the queue
@@ -121,4 +144,24 @@ impl<T: 'static> Shared<T> {
 
         Pop::new(n, synced)
     }
+
+    pub(crate) unsafe fn pop_n2<'a>(&'a self, synced2: &'a mut Synced2, n: usize) -> Pop2<'a, T> {
+        use std::cmp;
+
+        debug_assert!(n > 0);
+
+        // safety: All updates to the len atomic are guarded by the mutex. As
+        // such, a non-atomic load followed by a store is safe.
+        let len = self.len.unsync_load();
+        let n = cmp::min(n, len);
+
+        // Decrement the count.
+        self.len.store(len - n, Release);
+
+        Pop2::new(n, synced2)
+    }
+
+
+
+
 }

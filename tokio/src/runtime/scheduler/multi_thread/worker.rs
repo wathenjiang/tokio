@@ -162,7 +162,7 @@ pub(crate) struct Shared {
 
     /// Data synchronized by the scheduler mutex
     pub(super) synced: Mutex<Synced>,
-
+    
     /// Cores that have observed the shutdown signal
     ///
     /// The core is **not** placed back in the worker to avoid it from being
@@ -195,6 +195,7 @@ pub(crate) struct Synced {
 
     /// Synchronized state for `Inject`.
     pub(crate) inject: inject::Synced,
+    pub(crate) inject2: inject::Synced2,
 }
 
 /// Used to communicate with a worker from other threads.
@@ -279,7 +280,7 @@ pub(super) fn create(
     }
 
     let (idle, idle_synced) = Idle::new(size);
-    let (inject, inject_synced) = inject::Shared::new();
+    let (inject, inject_synced, inject_synced2) = inject::Shared::new();
 
     let remotes_len = remotes.len();
     let handle = Arc::new(Handle {
@@ -291,6 +292,7 @@ pub(super) fn create(
             synced: Mutex::new(Synced {
                 idle: idle_synced,
                 inject: inject_synced,
+                inject2: inject_synced2,
             }),
             shutdown_cores: Mutex::new(vec![]),
             trace_status: TraceStatus::new(remotes_len),
@@ -793,7 +795,7 @@ impl Core {
 
             let mut synced = worker.handle.shared.synced.lock();
             // safety: passing in the correct `inject::Synced`.
-            let mut tasks = unsafe { worker.inject().pop_n(&mut synced.inject, n) };
+            let mut tasks = unsafe { worker.inject().pop_n2(&mut synced.inject2, n) };
 
             // Pop the first task to return immedietly
             let ret = tasks.next();
@@ -1075,7 +1077,7 @@ impl Handle {
 
         let mut synced = self.shared.synced.lock();
         // safety: passing in correct `idle::Synced`
-        unsafe { self.shared.inject.pop(&mut synced.inject) }
+        unsafe { self.shared.inject.pop2(&mut synced.inject2) }
     }
 
     fn push_remote_task(&self, task: Notified) {
@@ -1084,7 +1086,7 @@ impl Handle {
         let mut synced = self.shared.synced.lock();
         // safety: passing in correct `idle::Synced`
         unsafe {
-            self.shared.inject.push(&mut synced.inject, task);
+            self.shared.inject.push2(&mut synced.inject2, task);
         }
     }
 
@@ -1181,7 +1183,8 @@ impl Overflow<Arc<Handle>> for Handle {
         I: Iterator<Item = task::Notified<Arc<Handle>>>,
     {
         unsafe {
-            self.shared.inject.push_batch(self, iter);
+            let tasks = iter.collect::<Vec<task::Notified<Arc<Handle>>>>();
+            self.shared.inject.push_batch2(self, tasks);
         }
     }
 }
@@ -1201,6 +1204,27 @@ impl<'a> Lock<inject::Synced> for &'a Handle {
 
     fn lock(self) -> Self::Handle {
         InjectGuard {
+            lock: self.shared.synced.lock(),
+        }
+    }
+}
+
+
+pub(crate) struct InjectGuard2<'a> {
+    lock: crate::loom::sync::MutexGuard<'a, Synced>,
+}
+
+impl<'a> AsMut<inject::Synced2> for InjectGuard2<'a> {
+    fn as_mut(&mut self) -> &mut inject::Synced2 {
+        &mut self.lock.inject2
+    }
+}
+
+impl<'a> Lock<inject::Synced2> for &'a Handle {
+    type Handle = InjectGuard2<'a>;
+
+    fn lock(self) -> Self::Handle {
+        InjectGuard2 {
             lock: self.shared.synced.lock(),
         }
     }

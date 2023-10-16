@@ -11,6 +11,7 @@ pub(crate) use shared::Shared;
 
 mod synced;
 pub(crate) use synced::Synced;
+pub(crate) use synced::Synced2;
 
 cfg_rt_multi_thread! {
     mod rt_multi_thread;
@@ -25,15 +26,17 @@ cfg_metrics! {
 pub(crate) struct Inject<T: 'static> {
     shared: Shared<T>,
     synced: Mutex<Synced>,
+    synced2: Mutex<Synced2>,
 }
 
 impl<T: 'static> Inject<T> {
     pub(crate) fn new() -> Inject<T> {
-        let (shared, synced) = Shared::new();
+        let (shared, synced, synced2) = Shared::new();
 
         Inject {
             shared,
             synced: Mutex::new(synced),
+            synced2: Mutex::new(synced2),
         }
     }
 
@@ -55,9 +58,9 @@ impl<T: 'static> Inject<T> {
     ///
     /// This does nothing if the queue is closed.
     pub(crate) fn push(&self, task: task::Notified<T>) {
-        let mut synced = self.synced.lock();
+        let mut synced2 = self.synced2.lock();
         // safety: passing correct `Synced`
-        unsafe { self.shared.push(&mut synced, task) }
+        unsafe { self.shared.push2(&mut synced2, task) }
     }
 
     pub(crate) fn pop(&self) -> Option<task::Notified<T>> {
@@ -65,8 +68,8 @@ impl<T: 'static> Inject<T> {
             return None;
         }
 
-        let mut synced = self.synced.lock();
+        let mut synced2 = self.synced2.lock();
         // safety: passing correct `Synced`
-        unsafe { self.shared.pop(&mut synced) }
+        unsafe { self.shared.pop2(&mut synced2) }
     }
 }

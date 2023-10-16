@@ -1,4 +1,4 @@
-use super::{Shared, Synced};
+use super::{Shared, Synced, Synced2};
 
 use crate::runtime::scheduler::Lock;
 use crate::runtime::task;
@@ -15,6 +15,20 @@ impl<'a> Lock<Synced> for &'a mut Synced {
 
 impl AsMut<Synced> for Synced {
     fn as_mut(&mut self) -> &mut Synced {
+        self
+    }
+}
+
+impl<'a> Lock<Synced2> for &'a mut Synced2 {
+    type Handle = &'a mut Synced2;
+
+    fn lock(self) -> Self::Handle {
+        self
+    }
+}
+
+impl AsMut<Synced2> for Synced2 {
+    fn as_mut(&mut self) -> &mut Synced2 {
         self
     }
 }
@@ -101,6 +115,35 @@ impl<T: 'static> Shared<T> {
         }
 
         synced.tail = Some(batch_tail);
+
+        // Increment the count.
+        //
+        // safety: All updates to the len atomic are guarded by the mutex. As
+        // such, a non-atomic load followed by a store is safe.
+        let len = self.len.unsync_load();
+
+        self.len.store(len + num, Release);
+    }
+
+    #[inline]
+    pub(crate) unsafe fn push_batch2<L>(
+        &self,
+        shared: L,
+        batch_tasks: Vec<task::Notified<T>>,
+    ) where
+        L: Lock<Synced2>,
+    {
+        let num = batch_tasks.len();
+        let mut synced2 = shared.lock();
+        if synced2.as_mut().is_closed {
+            drop(synced2);
+            drop(batch_tasks);
+            return;
+        }
+        let synced2 = synced2.as_mut();
+        for task in batch_tasks {
+            synced2.push(task.into_raw());
+        }
 
         // Increment the count.
         //
