@@ -151,9 +151,6 @@ pub(crate) struct Header {
     /// Task state.
     pub(super) state: State,
 
-    /// Pointer to next task, used with the injection queue.
-    pub(super) queue_next: UnsafeCell<Option<NonNull<Header>>>,
-
     /// Table of function pointers for executing actions on the task.
     pub(super) vtable: &'static Vtable,
 
@@ -214,7 +211,6 @@ impl<T: Future, S: Schedule> Cell<T, S> {
         ) -> Header {
             Header {
                 state,
-                queue_next: UnsafeCell::new(None),
                 vtable,
                 owner_id: UnsafeCell::new(None),
                 #[cfg(all(tokio_unstable, feature = "tracing"))]
@@ -384,10 +380,6 @@ impl<T: Future, S: Schedule> Core<T, S> {
 }
 
 impl Header {
-    pub(super) unsafe fn set_next(&self, next: Option<NonNull<Header>>) {
-        self.queue_next.with_mut(|ptr| *ptr = next);
-    }
-
     // safety: The caller must guarantee exclusive access to this field, and
     // must ensure that the id is either `None` or the id of the OwnedTasks
     // containing this task.
