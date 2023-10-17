@@ -38,9 +38,13 @@ impl<T: 'static> Shared<T> {
             return;
         }
         let synced = synced.as_mut();
-        for task in batch_tasks {
-            synced.push(task.into_raw());
-        }
+        
+        synced.push_batch(
+            batch_tasks
+                .into_iter()
+                .map(|task| task.into_raw())
+                .collect::<Vec<_>>(),
+        );
 
         // Increment the count.
         //
