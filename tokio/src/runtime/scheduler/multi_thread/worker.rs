@@ -1182,7 +1182,7 @@ impl Overflow<Arc<Handle>> for Handle {
     {
         unsafe {
             let tasks = iter.collect::<Vec<task::Notified<Arc<Handle>>>>();
-            self.shared.inject.push_batch2(self, tasks);
+            self.shared.inject.push_batch(self, tasks);
         }
     }
 }

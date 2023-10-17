@@ -68,14 +68,14 @@ impl<T: 'static> Shared<T> {
     /// # Safety
     ///
     /// Must be called with the same `Synced` instance returned by `Inject::new`
-    pub(crate) unsafe fn push(&self, synced2: &mut Synced, task: task::Notified<T>) {
-        if synced2.is_closed {
+    pub(crate) unsafe fn push(&self, synced: &mut Synced, task: task::Notified<T>) {
+        if synced.is_closed {
             return;
         }
         // safety: only mutated with the lock held
         let len = self.len.unsync_load();
         let task = task.into_raw();
-        synced2.push(task);
+        synced.push(task);
         self.len.store(len + 1, Release);
     }
 
@@ -108,8 +108,4 @@ impl<T: 'static> Shared<T> {
 
         Pop::new(n, synced)
     }
-
-
-
-
 }

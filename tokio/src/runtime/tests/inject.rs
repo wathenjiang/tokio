@@ -4,27 +4,27 @@ use crate::runtime::scheduler::inject;
 fn push_and_pop() {
     const N: usize = 2;
 
-    let (inject, mut _synced, mut synced2) = inject::Shared::new();
+    let (inject, mut synced) = inject::Shared::new();
 
     for i in 0..N {
         assert_eq!(inject.len(), i);
         let (task, _) = super::unowned(async {});
-        unsafe { inject.push(&mut synced2, task) };
+        unsafe { inject.push(&mut synced, task) };
     }
 
     for i in 0..N {
         assert_eq!(inject.len(), N - i);
-        assert!(unsafe { inject.pop2(&mut synced2) }.is_some());
+        assert!(unsafe { inject.pop(&mut synced) }.is_some());
     }
 
     println!("--------------");
 
-    assert!(unsafe { inject.pop2(&mut synced2) }.is_none());
+    assert!(unsafe { inject.pop(&mut synced) }.is_none());
 }
 
 #[test]
 fn push_batch_and_pop() {
-    let (inject, mut inject_synced, _synced2) = inject::Shared::new();
+    let (inject, mut inject_synced) = inject::Shared::new();
 
     unsafe {
         inject.push_batch(
@@ -40,7 +40,7 @@ fn push_batch_and_pop() {
 
 #[test]
 fn pop_n_drains_on_drop() {
-    let (inject, mut inject_synced, _inject_synced2) = inject::Shared::new();
+    let (inject, mut inject_synced) = inject::Shared::new();
 
     unsafe {
         inject.push_batch(

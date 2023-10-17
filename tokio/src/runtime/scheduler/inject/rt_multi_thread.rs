@@ -26,7 +26,7 @@ impl<T: 'static> Shared<T> {
     ///
     /// Must be called with the same `Synced` instance returned by `Inject::new`}
     #[inline]
-    pub(crate) unsafe fn push_batch2<L>(
+    pub(crate) unsafe fn push_batch<L>(
         &self,
         shared: L,
         batch_tasks: Vec<task::Notified<T>>,
@@ -34,15 +34,15 @@ impl<T: 'static> Shared<T> {
         L: Lock<Synced>,
     {
         let num = batch_tasks.len();
-        let mut synced2 = shared.lock();
-        if synced2.as_mut().is_closed {
-            drop(synced2);
+        let mut synced = shared.lock();
+        if synced.as_mut().is_closed {
+            drop(synced);
             drop(batch_tasks);
             return;
         }
-        let synced2 = synced2.as_mut();
+        let synced = synced.as_mut();
         for task in batch_tasks {
-            synced2.push(task.into_raw());
+            synced.push(task.into_raw());
         }
 
         // Increment the count.
