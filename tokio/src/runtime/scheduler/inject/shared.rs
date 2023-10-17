@@ -34,8 +34,8 @@ impl<T: 'static> Shared<T> {
 
         let synced2 = Synced2 {
             is_closed: false,
-            list: LinkedList::new(),
-            current: None,
+            head: None,
+            tail: None,
         };
 
         (inject, synced, synced2)
