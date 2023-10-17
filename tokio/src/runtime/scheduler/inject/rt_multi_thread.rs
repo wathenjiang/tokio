@@ -38,7 +38,7 @@ impl<T: 'static> Shared<T> {
             return;
         }
         let synced = synced.as_mut();
-        
+
         synced.push_batch(
             batch_tasks
                 .into_iter()

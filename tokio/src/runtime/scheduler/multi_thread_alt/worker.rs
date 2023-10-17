@@ -1434,7 +1434,7 @@ impl Shared {
         I: Iterator<Item = task::Notified<Arc<Handle>>>,
     {
         unsafe {
-            self.inject.push_batch(self, iter);
+            self.inject.push_batch(self, iter.collect::<Vec<_>>());
         }
     }
 
@@ -1443,7 +1443,8 @@ impl Shared {
         I: Iterator<Item = task::Notified<Arc<Handle>>>,
     {
         unsafe {
-            self.inject.push_batch(&mut synced.inject, iter);
+            self.inject
+                .push_batch(&mut synced.inject, iter.collect::<Vec<_>>());
         }
     }
 
