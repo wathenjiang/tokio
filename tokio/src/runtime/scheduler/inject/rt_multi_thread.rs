@@ -26,11 +26,8 @@ impl<T: 'static> Shared<T> {
     ///
     /// Must be called with the same `Synced` instance returned by `Inject::new`}
     #[inline]
-    pub(crate) unsafe fn push_batch<L>(
-        &self,
-        shared: L,
-        batch_tasks: Vec<task::Notified<T>>,
-    ) where
+    pub(crate) unsafe fn push_batch<L>(&self, shared: L, batch_tasks: Vec<task::Notified<T>>)
+    where
         L: Lock<Synced>,
     {
         let num = batch_tasks.len();

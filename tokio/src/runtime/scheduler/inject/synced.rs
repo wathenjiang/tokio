@@ -3,9 +3,8 @@
     allow(dead_code)
 )]
 
-use std::ptr::NonNull;
-
 use crate::runtime::task;
+use std::ptr::NonNull;
 
 pub(crate) struct Synced {
     /// True if the queue is closed.
@@ -17,7 +16,7 @@ pub(crate) struct Synced {
 pub(crate) struct SyncedNode {
     index: usize,
     tasks: Vec<task::RawTask>,
-    /// Pointer to next node
+    /// Pointer to the next node
     next: Option<NonNull<SyncedNode>>,
 }
 
@@ -35,23 +34,25 @@ const TASKS_CAPACITY: usize = 16;
 impl Synced {
     pub(super) fn pop<T: 'static>(&mut self) -> Option<task::Notified<T>> {
         if let Some(head) = self.head {
-            // 将 head 指针理解为存储于 heap 上的 ListNode
             let mut head = unsafe { Box::from_raw(head.as_ptr()) };
             let task = head.tasks[head.index];
             head.index += 1;
-            // head
+
             if head.index == TASKS_CAPACITY {
+                // Safety: if the next is Some, the next must be non-null
                 unsafe {
                     self.head = head.next.map(|next| NonNull::new_unchecked(next.as_ptr()));
-                    if self.head.is_none() {
-                        self.tail = None;
-                    }
                 }
+                if self.head.is_none() {
+                    self.tail = None;
+                }
+                drop(head);
+            } else {
+                Box::leak(head);
             }
-            Box::leak(head);
             return Some(unsafe { task::Notified::from_raw(task) });
         }
-        return None;
+        None
     }
 
     pub(super) fn push(&mut self, task: task::RawTask) {
@@ -63,24 +64,21 @@ impl Synced {
             }
         }
 
-        let mut new_node = Box::new(SyncedNode {
+        let mut next = Box::new(SyncedNode {
             index: 0,
             tasks: Vec::with_capacity(TASKS_CAPACITY),
             next: None,
         });
-        new_node.tasks.push(task);
-        let new_node_ptr = NonNull::from(Box::leak(new_node));
+        next.tasks.push(task);
+        let new_node_ptr = NonNull::from(Box::leak(next));
 
-        unsafe {
-            // 新节点作为老节点的子节点，新节点转为新的 tail 节点
-            if let Some(mut tail) = self.tail {
-                tail.as_mut().next = Some(new_node_ptr);
-            }
-            self.tail = Some(new_node_ptr);
-            // 如果 head 没有设置，那么为 head 进行设置
-            if self.head.is_none() {
-                self.head = self.tail;
-            }
+        if let Some(mut tail) = self.tail {
+            // Safety: the current thread write it exclusively
+            unsafe { tail.as_mut().next = Some(new_node_ptr) };
+        }
+        self.tail = Some(new_node_ptr);
+        if self.head.is_none() {
+            self.head = self.tail;
         }
     }
 

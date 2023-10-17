@@ -29,7 +29,9 @@ fn push_batch_and_pop() {
     unsafe {
         inject.push_batch(
             &mut inject_synced,
-            (0..10).map(|_| super::unowned(async {}).0),
+            (0..10)
+                .map(|_| super::unowned(async {}).0)
+                .collect::<Vec<_>>(),
         );
 
         assert_eq!(5, inject.pop_n(&mut inject_synced, 5).count());
@@ -45,7 +47,9 @@ fn pop_n_drains_on_drop() {
     unsafe {
         inject.push_batch(
             &mut inject_synced,
-            (0..10).map(|_| super::unowned(async {}).0),
+            (0..10)
+                .map(|_| super::unowned(async {}).0)
+                .collect::<Vec<_>>(),
         );
         let _ = inject.pop_n(&mut inject_synced, 10);
 

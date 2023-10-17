@@ -162,7 +162,7 @@ pub(crate) struct Shared {
 
     /// Data synchronized by the scheduler mutex
     pub(super) synced: Mutex<Synced>,
-    
+
     /// Cores that have observed the shutdown signal
     ///
     /// The core is **not** placed back in the worker to avoid it from being
