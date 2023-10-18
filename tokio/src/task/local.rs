@@ -918,7 +918,7 @@ impl Context {
             self.shared
                 .local_state
                 .owned
-                .bind(future, self.shared.clone(), id)
+                .bind(future, self.shared.clone(), id, None)
         };
 
         if let Some(notified) = notified {

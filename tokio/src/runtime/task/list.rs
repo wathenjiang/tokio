@@ -15,7 +15,7 @@ use std::sync::atomic::AtomicUsize;
 
 use crate::loom::sync::atomic::{AtomicBool, Ordering};
 use std::marker::PhantomData;
-use std::num::NonZeroU64;
+use std::num::{NonZeroU32, NonZeroU64};
 
 use super::core::Header;
 
@@ -62,7 +62,7 @@ pub(crate) struct OwnedTasks<S: 'static> {
     lists: Box<[Mutex<ListSement<S>>]>,
     pub(crate) id: NonZeroU64,
     closed: AtomicBool,
-    segment_mask: u32,
+    segment_mask: usize,
     count: AtomicUsize,
 }
 
@@ -79,18 +79,17 @@ struct OwnedTasksInner<S: 'static> {
 }
 
 impl<S: 'static> OwnedTasks<S> {
-    pub(crate) fn new(concurrency_level: u32) -> Self {
-        // Find power-of-two sizes best matching arguments
-        let mut segment_size = 1;
-        while segment_size < concurrency_level {
-            segment_size <<= 1;
-        }
-        let segment_mask = segment_size - 1;
-
-        let mut lists = Vec::with_capacity(segment_size as usize);
-        for _ in 0..segment_size {
+    pub(crate) fn new(core_count: usize) -> Self {
+        assert!(core_count > 0, "cores cannot be set to 0");
+        const SEGMENT_SIZE: usize = 4;
+        let segment_mask = SEGMENT_SIZE - 1;
+        let list_size = core_count * SEGMENT_SIZE;
+        // lists init
+        let mut lists = Vec::with_capacity(list_size);
+        for _ in 0..list_size {
             lists.push(Mutex::new(LinkedList::new()))
         }
+        println!("list_size : {}", list_size);
         Self {
             lists: lists.into_boxed_slice(),
             closed: AtomicBool::new(false),
@@ -107,19 +106,25 @@ impl<S: 'static> OwnedTasks<S> {
         task: T,
         scheduler: S,
         id: super::Id,
+        core_id: Option<NonZeroU32>,
     ) -> (JoinHandle<T::Output>, Option<Notified<S>>)
     where
         S: Schedule,
         T: Future + Send + 'static,
         T::Output: Send + 'static,
     {
-        let (task, notified, join) = super::new_task(task, scheduler, id);
-        let notified = unsafe { self.bind_inner(task, notified) };
+        let (task, notified, join) = super::new_task(task, scheduler, id, core_id);
+        let notified = unsafe { self.bind_inner(task, notified, core_id) };
         (join, notified)
     }
 
     /// The part of `bind` that's the same for every type of future.
-    unsafe fn bind_inner(&self, task: Task<S>, notified: Notified<S>) -> Option<Notified<S>>
+    unsafe fn bind_inner(
+        &self,
+        task: Task<S>,
+        notified: Notified<S>,
+        core_id: Option<NonZeroU32>,
+    ) -> Option<Notified<S>>
     where
         S: Schedule,
     {
@@ -128,17 +133,22 @@ impl<S: 'static> OwnedTasks<S> {
             // to the field.
             task.header().set_owner_id(self.id);
         }
-        self.push_inner(task, notified)
+        self.push_inner(task, notified, core_id)
     }
 
     #[inline]
-    pub(crate) fn push_inner(&self, task: Task<S>, notified: Notified<S>) -> Option<Notified<S>>
+    pub(crate) fn push_inner(
+        &self,
+        task: Task<S>,
+        notified: Notified<S>,
+        core_id: Option<NonZeroU32>,
+    ) -> Option<Notified<S>>
     where
         S: Schedule,
     {
         // Safety: it is safe, because every task has one task_id
         let task_id = unsafe { Header::get_id(task.header_ptr()) };
-        let mut lock = self.segment_inner(task_id.0 as usize);
+        let mut lock = self.segment_inner(task_id.0 as usize, core_id);
 
         // check close flag,
         // it must be checked in the lock, for ensuring all tasks will shutdown after OwnedTasks has been closed
@@ -176,9 +186,9 @@ impl<S: 'static> OwnedTasks<S> {
         S: Schedule,
     {
         self.closed.store(true, Ordering::Release);
-        for i in start..self.get_segment_size() + start {
+        for i in start..self.get_lists_size() + start {
             loop {
-                let mut lock = self.segment_inner(i);
+                let mut lock = self.lists[i % self.get_lists_size()].lock();
                 let task = lock.pop_back();
                 match task {
                     Some(task) => {
@@ -194,6 +204,11 @@ impl<S: 'static> OwnedTasks<S> {
 
     #[inline]
     pub(crate) fn get_segment_size(&self) -> usize {
+        self.segment_mask as usize + 1
+    }
+
+    #[inline]
+    pub(crate) fn get_lists_size(&self) -> usize {
         self.lists.len()
     }
 
@@ -216,8 +231,14 @@ impl<S: 'static> OwnedTasks<S> {
     #[inline]
     unsafe fn remove_inner(&self, task: &Task<S>) -> Option<Task<S>> {
         // Safety: it is safe, because every task has one task_id
-        let task_id = unsafe { Header::get_id(task.header_ptr()) };
-        let mut lock = self.segment_inner(task_id.0 as usize);
+        let (task_id, core_id) = unsafe {
+            (
+                Header::get_id(task.header_ptr()),
+                Header::get_core_id(task.header_ptr()),
+            )
+        };
+
+        let mut lock = self.segment_inner(task_id.0 as usize, core_id);
         let task = lock.remove(task.header_ptr());
         if task.is_some() {
             self.count.fetch_sub(1, Ordering::Relaxed);
@@ -226,13 +247,22 @@ impl<S: 'static> OwnedTasks<S> {
     }
 
     #[inline]
-    fn segment_inner(&self, id: usize) -> MutexGuard<'_, ListSement<S>> {
-        // Safety: this modulo operation ensures it is safe here.
-        unsafe {
-            self.lists
-                .get_unchecked(id & (self.segment_mask) as usize)
-                .lock()
-        }
+    fn segment_inner(
+        &self,
+        task_id: usize,
+        core_id: Option<NonZeroU32>,
+    ) -> MutexGuard<'_, ListSement<S>> {
+        // get index by core_id
+        let index = {
+            match core_id {
+                Some(i) => (i.get() -1) as usize * self.get_segment_size(),
+                None => 0,
+            }
+        };
+        // get offset by task_id
+        let offset = task_id & self.segment_mask;
+        // Safety: the above modulo operation ensures it is safe here.
+        unsafe { self.lists.get_unchecked(index + offset).lock() }
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -275,13 +305,14 @@ impl<S: 'static> LocalOwnedTasks<S> {
         task: T,
         scheduler: S,
         id: super::Id,
+        core_id: Option<NonZeroU32>,
     ) -> (JoinHandle<T::Output>, Option<Notified<S>>)
     where
         S: Schedule,
         T: Future + 'static,
         T::Output: 'static,
     {
-        let (task, notified, join) = super::new_task(task, scheduler, id);
+        let (task, notified, join) = super::new_task(task, scheduler, id, core_id);
 
         unsafe {
             // safety: We just created the task, so we have exclusive access

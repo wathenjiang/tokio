@@ -210,6 +210,7 @@ use crate::future::Future;
 use crate::util::linked_list;
 
 use std::marker::PhantomData;
+use std::num::NonZeroU32;
 use std::ptr::NonNull;
 use std::{fmt, mem};
 
@@ -286,13 +287,14 @@ cfg_rt! {
         task: T,
         scheduler: S,
         id: Id,
+        core_id: Option<NonZeroU32>,
     ) -> (Task<S>, Notified<S>, JoinHandle<T::Output>)
     where
         S: Schedule,
         T: Future + 'static,
         T::Output: 'static,
     {
-        let raw = RawTask::new::<T, S>(task, scheduler, id);
+        let raw = RawTask::new::<T, S>(task, scheduler, id, core_id);
         let task = Task {
             raw,
             _p: PhantomData,
@@ -316,7 +318,7 @@ cfg_rt! {
         T: Send + Future + 'static,
         T::Output: Send + 'static,
     {
-        let (task, notified, join) = new_task(task, scheduler, id);
+        let (task, notified, join) = new_task(task, scheduler, id, None);
 
         // This transfers the ref-count of task and notified into an UnownedTask.
         // This is valid because an UnownedTask holds two ref-counts.

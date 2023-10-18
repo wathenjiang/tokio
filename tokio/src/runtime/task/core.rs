@@ -17,7 +17,7 @@ use crate::runtime::task::state::State;
 use crate::runtime::task::{Id, Schedule};
 use crate::util::linked_list;
 
-use std::num::NonZeroU64;
+use std::num::{NonZeroU32, NonZeroU64};
 use std::pin::Pin;
 use std::ptr::NonNull;
 use std::task::{Context, Poll, Waker};
@@ -141,6 +141,9 @@ pub(super) struct Core<T: Future, S> {
     /// The task's ID, used for populating `JoinError`s.
     pub(super) task_id: Id,
 
+    /// The ID of Core
+    pub(super) core_id: Option<NonZeroU32>,
+
     /// Either the future or the output.
     pub(super) stage: CoreStage<T>,
 }
@@ -205,7 +208,13 @@ pub(super) enum Stage<T: Future> {
 impl<T: Future, S: Schedule> Cell<T, S> {
     /// Allocates a new task cell, containing the header, trailer, and core
     /// structures.
-    pub(super) fn new(future: T, scheduler: S, state: State, task_id: Id) -> Box<Cell<T, S>> {
+    pub(super) fn new(
+        future: T,
+        scheduler: S,
+        state: State,
+        task_id: Id,
+        core_id: Option<NonZeroU32>,
+    ) -> Box<Cell<T, S>> {
         // Separated into a non-generic function to reduce LLVM codegen
         fn new_header(
             state: State,
@@ -238,6 +247,7 @@ impl<T: Future, S: Schedule> Cell<T, S> {
                     stage: UnsafeCell::new(Stage::Running(future)),
                 },
                 task_id,
+                core_id,
             },
             trailer: Trailer::new(),
         });
@@ -444,6 +454,31 @@ impl Header {
     /// The provided raw pointer must point at the header of a task.
     pub(super) unsafe fn get_id(me: NonNull<Header>) -> Id {
         let ptr = Header::get_id_ptr(me).as_ptr();
+        *ptr
+    }
+
+    /// Gets a pointer to the core_id of the task containing this `Header`.
+    ///
+    /// # Safety
+    ///
+    /// The provided raw pointer must point at the header of a task.
+    pub(super) unsafe fn get_core_id_ptr(me: NonNull<Header>) -> NonNull<Option<NonZeroU32>> {
+        let offset = me.as_ref().vtable.core_id_offset;
+        let id = me
+            .as_ptr()
+            .cast::<u8>()
+            .add(offset)
+            .cast::<Option<NonZeroU32>>();
+        NonNull::new_unchecked(id)
+    }
+
+    /// Gets the core_id of the task containing this `Header`.
+    ///
+    /// # Safety
+    ///
+    /// The provided raw pointer must point at the header of a task.
+    pub(super) unsafe fn get_core_id(me: NonNull<Header>) -> Option<NonZeroU32> {
+        let ptr = Header::get_core_id_ptr(me).as_ptr();
         *ptr
     }
 

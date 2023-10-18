@@ -51,7 +51,8 @@ impl Handle {
         T: Future + Send + 'static,
         T::Output: Send + 'static,
     {
-        let (handle, notified) = me.shared.owned.bind(future, me.clone(), id);
+        let core_id = me.get_core_id();
+        let (handle, notified) = me.shared.owned.bind(future, me.clone(), id, core_id);
 
         me.schedule_option_task_without_yield(notified);
 

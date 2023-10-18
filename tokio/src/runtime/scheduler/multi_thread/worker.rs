@@ -71,6 +71,7 @@ use crate::util::atomic_cell::AtomicCell;
 use crate::util::rand::{FastRand, RngSeedGenerator};
 
 use std::cell::RefCell;
+use std::num::NonZeroU32;
 use std::task::Waker;
 use std::time::Duration;
 
@@ -141,6 +142,9 @@ struct Core {
 
     /// Fast random number generator.
     rand: FastRand,
+
+    // Core's ID, starts from 1
+    core_id: u32,
 }
 
 /// State shared across all workers
@@ -245,7 +249,6 @@ pub(super) fn create(
     driver_handle: driver::Handle,
     blocking_spawner: blocking::Spawner,
     seed_generator: RngSeedGenerator,
-    spawn_concurrency_level: usize,
     config: Config,
 ) -> (Arc<Handle>, Launch) {
     let mut cores = Vec::with_capacity(size);
@@ -253,7 +256,7 @@ pub(super) fn create(
     let mut worker_metrics = Vec::with_capacity(size);
 
     // Create the local queues
-    for _ in 0..size {
+    for i in 0..size {
         let (steal, run_queue) = queue::local();
 
         let park = park.clone();
@@ -273,6 +276,7 @@ pub(super) fn create(
             global_queue_interval: stats.tuned_global_queue_interval(&config),
             stats,
             rand: FastRand::from_seed(config.seed_generator.next_seed()),
+            core_id: i as u32 + 1,
         }));
 
         remotes.push(Remote { steal, unpark });
@@ -288,7 +292,7 @@ pub(super) fn create(
             remotes: remotes.into_boxed_slice(),
             inject,
             idle,
-            owned: OwnedTasks::new(spawn_concurrency_level as u32),
+            owned: OwnedTasks::new(size),
             synced: Mutex::new(Synced {
                 idle: idle_synced,
                 inject: inject_synced,
@@ -957,7 +961,7 @@ impl Core {
         // Start from a random inner list
         let start = self
             .rand
-            .fastrand_n(worker.handle.shared.owned.get_segment_size() as u32);
+            .fastrand_n(worker.handle.shared.owned.get_lists_size() as u32);
         // Signal to all tasks to shut down.
         worker
             .handle
@@ -1040,6 +1044,21 @@ impl Handle {
         if let Some(task) = task {
             self.schedule_task(task, false);
         }
+    }
+
+    pub(super) fn get_core_id(&self) -> Option<NonZeroU32> {
+        with_current(|maybe_cx| {
+            if let Some(cx) = maybe_cx {
+                // Make sure the task is part of the **current** scheduler.
+                if self.ptr_eq(&cx.worker.handle) {
+                    // And the current thread still holds a core
+                    if let Some(core) = cx.core.borrow_mut().as_mut() {
+                        return NonZeroU32::new(core.core_id);
+                    }
+                }
+            }
+            return None;
+        })
     }
 
     fn schedule_local(&self, core: &mut Core, task: Notified, is_yield: bool) {

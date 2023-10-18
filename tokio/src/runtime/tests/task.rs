@@ -271,7 +271,7 @@ impl Runtime {
         T: 'static + Send + Future,
         T::Output: 'static + Send,
     {
-        let (handle, notified) = self.0.owned.bind(future, self.clone(), Id::next());
+        let (handle, notified) = self.0.owned.bind(future, self.clone(), Id::next(), core_id);
 
         if let Some(notified) = notified {
             self.schedule(notified);

@@ -2,6 +2,7 @@ use crate::future::Future;
 use crate::runtime::task::core::{Core, Trailer};
 use crate::runtime::task::{Cell, Harness, Header, Id, Schedule, State};
 
+use std::num::NonZeroU32;
 use std::ptr::NonNull;
 use std::task::{Poll, Waker};
 
@@ -40,6 +41,9 @@ pub(super) struct Vtable {
 
     /// The number of bytes that the `id` field is offset from the header.
     pub(super) id_offset: usize,
+
+    // The number of bytes that the `core_id` field is offset from the header.
+    pub(super) core_id_offset: usize,
 }
 
 /// Get the vtable for the requested `T` and `S` generics.
@@ -55,6 +59,7 @@ pub(super) fn vtable<T: Future, S: Schedule>() -> &'static Vtable {
         trailer_offset: OffsetHelper::<T, S>::TRAILER_OFFSET,
         scheduler_offset: OffsetHelper::<T, S>::SCHEDULER_OFFSET,
         id_offset: OffsetHelper::<T, S>::ID_OFFSET,
+        core_id_offset: OffsetHelper::<T, S>::CORE_ID_OFFSET,
     }
 }
 
@@ -87,6 +92,15 @@ impl<T: Future, S: Schedule> OffsetHelper<T, S> {
         std::mem::align_of::<Core<T, S>>(),
         std::mem::size_of::<S>(),
         std::mem::align_of::<Id>(),
+    );
+
+    const CORE_ID_OFFSET: usize = get_core_id_offset(
+        std::mem::size_of::<Header>(),
+        std::mem::align_of::<Core<T, S>>(),
+        std::mem::size_of::<S>(),
+        std::mem::align_of::<Id>(),
+        std::mem::size_of::<Id>(),
+        std::mem::align_of::<Option<NonZeroU32>>(),
     );
 }
 
@@ -147,21 +161,51 @@ const fn get_id_offset(
     let mut offset = get_core_offset(header_size, core_align);
     offset += scheduler_size;
 
-    let id_misalign = offset % id_align;
+    let core_id_misalign = offset % id_align;
+    if core_id_misalign > 0 {
+        offset += id_align - core_id_misalign;
+    }
+
+    offset
+}
+
+/// Compute the offset of the `Id` field in `Cell<T, S>` using the
+/// `#[repr(C)]` algorithm.
+///
+/// Pseudo-code for the `#[repr(C)]` algorithm can be found here:
+/// <https://doc.rust-lang.org/reference/type-layout.html#reprc-structs>
+const fn get_core_id_offset(
+    header_size: usize,
+    core_align: usize,
+    scheduler_size: usize,
+    id_align: usize,
+    id_size: usize,
+    core_id_align: usize,
+) -> usize {
+    let mut offset = get_id_offset(header_size, core_align, scheduler_size, id_align);
+    offset += id_size;
+
+    let id_misalign = offset % core_id_align;
     if id_misalign > 0 {
-        offset += id_align - id_misalign;
+        offset += core_id_align - id_misalign;
     }
 
     offset
 }
 
 impl RawTask {
-    pub(super) fn new<T, S>(task: T, scheduler: S, id: Id) -> RawTask
+    pub(super) fn new<T, S>(task: T, scheduler: S, id: Id, core_id: Option<NonZeroU32>) -> RawTask
     where
         T: Future,
         S: Schedule,
     {
-        let ptr = Box::into_raw(Cell::<_, S>::new(task, scheduler, State::new(), id));
+        let ptr = Box::into_raw(Cell::<_, S>::new(
+            task,
+            scheduler,
+            State::new(),
+            id,
+            core_id,
+        ));
         let ptr = unsafe { NonNull::new_unchecked(ptr as *mut Header) };
 
         RawTask { ptr }
