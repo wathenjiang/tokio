@@ -114,7 +114,7 @@ unsafe impl<T: Sync> Sync for Pointers<T> {}
 
 impl<L, T> LinkedList2<L, T> {
     /// Creates an empty linked list.
-    pub(crate) const fn new() -> LinkedList2<L, T> {
+    pub(crate) fn new() -> LinkedList2<L, T> {
         LinkedList2 {
             head_mutex: Mutex::new(()),
             rm_mutex: Mutex::new(()),
