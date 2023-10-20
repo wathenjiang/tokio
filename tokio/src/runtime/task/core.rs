@@ -15,7 +15,7 @@ use crate::runtime::context;
 use crate::runtime::task::raw::{self, Vtable};
 use crate::runtime::task::state::State;
 use crate::runtime::task::{Id, Schedule};
-use crate::util::linked_list;
+use crate::util::linked_list_withouht_tail as linked_list;
 
 use std::num::NonZeroU64;
 use std::pin::Pin;

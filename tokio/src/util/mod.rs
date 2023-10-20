@@ -41,6 +41,17 @@ pub(crate) use wake_list::WakeList;
     feature = "time",
 ))]
 pub(crate) mod linked_list;
+#[cfg(any(
+    feature = "fs",
+    feature = "net",
+    feature = "process",
+    feature = "rt",
+    feature = "sync",
+    feature = "signal",
+    feature = "time",
+))]
+pub(crate) mod linked_list_withouht_tail;
+
 
 #[cfg(any(feature = "rt", feature = "macros"))]
 pub(crate) mod rand;

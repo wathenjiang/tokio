@@ -10,7 +10,7 @@ use crate::future::Future;
 use crate::loom::cell::UnsafeCell;
 use crate::loom::sync::{Mutex, MutexGuard};
 use crate::runtime::task::{JoinHandle, LocalNotified, Notified, Schedule, Task};
-use crate::util::linked_list::{Link, LinkedList};
+use crate::util::linked_list_withouht_tail::{Link, LinkedList2 as LinkedList};
 use std::sync::atomic::AtomicUsize;
 
 use crate::loom::sync::atomic::{AtomicBool, Ordering};
@@ -179,7 +179,7 @@ impl<S: 'static> OwnedTasks<S> {
         for i in start..self.get_segment_size() + start {
             loop {
                 let mut lock = self.segment_inner(i);
-                let task = lock.pop_back();
+                let task = lock.pop_front();
                 match task {
                     Some(task) => {
                         self.count.fetch_sub(1, Ordering::Relaxed);
@@ -309,7 +309,7 @@ impl<S: 'static> LocalOwnedTasks<S> {
     {
         self.with_inner(|inner| inner.closed = true);
 
-        while let Some(task) = self.with_inner(|inner| inner.list.pop_back()) {
+        while let Some(task) = self.with_inner(|inner| inner.list.pop_front()) {
             task.shutdown();
         }
     }

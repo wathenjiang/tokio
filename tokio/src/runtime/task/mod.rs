@@ -207,7 +207,7 @@ cfg_taskdump! {
 }
 
 use crate::future::Future;
-use crate::util::linked_list;
+use crate::util::linked_list_withouht_tail as linked_list;
 
 use std::marker::PhantomData;
 use std::ptr::NonNull;
