@@ -8,7 +8,6 @@
 
 use crate::future::Future;
 use crate::loom::cell::UnsafeCell;
-use crate::loom::sync::{Mutex, MutexGuard};
 use crate::runtime::task::{JoinHandle, LocalNotified, Notified, Schedule, Task};
 use crate::util::linked_list_withouht_tail::{Link, LinkedList2 as LinkedList};
 use std::sync::atomic::AtomicUsize;
@@ -59,7 +58,7 @@ cfg_not_has_atomic_u64! {
 }
 
 pub(crate) struct OwnedTasks<S: 'static> {
-    lists: Box<[Mutex<ListSement<S>>]>,
+    lists: Box<[ListSement<S>]>,
     pub(crate) id: NonZeroU64,
     closed: AtomicBool,
     segment_mask: u32,
@@ -89,7 +88,7 @@ impl<S: 'static> OwnedTasks<S> {
 
         let mut lists = Vec::with_capacity(segment_size as usize);
         for _ in 0..segment_size {
-            lists.push(Mutex::new(LinkedList::new()))
+            lists.push(LinkedList::new())
         }
         Self {
             lists: lists.into_boxed_slice(),
@@ -138,7 +137,7 @@ impl<S: 'static> OwnedTasks<S> {
     {
         // Safety: it is safe, because every task has one task_id
         let task_id = unsafe { Header::get_id(task.header_ptr()) };
-        let mut lock = self.segment_inner(task_id.0 as usize);
+        let lock = self.segment_inner(task_id.0 as usize);
 
         // check close flag,
         // it must be checked in the lock, for ensuring all tasks will shutdown after OwnedTasks has been closed
@@ -178,7 +177,7 @@ impl<S: 'static> OwnedTasks<S> {
         self.closed.store(true, Ordering::Release);
         for i in start..self.get_segment_size() + start {
             loop {
-                let mut lock = self.segment_inner(i);
+                let lock = self.segment_inner(i);
                 let task = lock.pop_front();
                 match task {
                     Some(task) => {
@@ -217,7 +216,7 @@ impl<S: 'static> OwnedTasks<S> {
     unsafe fn remove_inner(&self, task: &Task<S>) -> Option<Task<S>> {
         // Safety: it is safe, because every task has one task_id
         let task_id = unsafe { Header::get_id(task.header_ptr()) };
-        let mut lock = self.segment_inner(task_id.0 as usize);
+        let lock = self.segment_inner(task_id.0 as usize);
         let task = lock.remove(task.header_ptr());
         if task.is_some() {
             self.count.fetch_sub(1, Ordering::Relaxed);
@@ -226,12 +225,11 @@ impl<S: 'static> OwnedTasks<S> {
     }
 
     #[inline]
-    fn segment_inner(&self, id: usize) -> MutexGuard<'_, ListSement<S>> {
+    fn segment_inner(&self, id: usize) -> &ListSement<S>  {
         // Safety: this modulo operation ensures it is safe here.
         unsafe {
             self.lists
                 .get_unchecked(id & (self.segment_mask) as usize)
-                .lock()
         }
     }
 

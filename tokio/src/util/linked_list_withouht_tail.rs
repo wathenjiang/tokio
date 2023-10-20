@@ -12,13 +12,18 @@ use core::marker::{PhantomData, PhantomPinned};
 use core::mem::ManuallyDrop;
 use core::ptr::{self, NonNull};
 
+use crate::loom::sync::Mutex;
+
 /// An intrusive linked list.
 ///
 /// Currently, the list is not emptied on drop. It is the caller's
 /// responsibility to ensure the list is empty before dropping it.
 pub(crate) struct LinkedList2<L, T> {
+    head_mutex: Mutex<()>,
+    rm_mutex: Mutex<()>,
+
     /// Linked list head
-    head: Option<NonNull<T>>,
+    head: UnsafeCell<Option<NonNull<T>>>,
 
     /// Node type marker.
     _marker: PhantomData<*const L>,
@@ -111,7 +116,9 @@ impl<L, T> LinkedList2<L, T> {
     /// Creates an empty linked list.
     pub(crate) const fn new() -> LinkedList2<L, T> {
         LinkedList2 {
-            head: None,
+            head_mutex: Mutex::new(()),
+            rm_mutex: Mutex::new(()),
+            head: UnsafeCell::new(None),
             _marker: PhantomData,
         }
     }
@@ -119,34 +126,38 @@ impl<L, T> LinkedList2<L, T> {
 
 impl<L: Link> LinkedList2<L, L::Target> {
     /// Adds an element first in the list.
-    pub(crate) fn push_front(&mut self, val: L::Handle) {
+    pub(crate) fn push_front(&self, val: L::Handle) {
+        let _lock = self.head_mutex.lock();
+
         // The value should not be dropped, it is being inserted into the list
         let val = ManuallyDrop::new(val);
         let ptr = L::as_raw(&val);
-        assert_ne!(self.head, Some(ptr));
+        assert_ne!(unsafe { *self.head.get() }, Some(ptr));
         unsafe {
-            L::pointers(ptr).as_mut().set_next(self.head);
+            L::pointers(ptr).as_mut().set_next(*self.head.get());
             L::pointers(ptr).as_mut().set_prev(None);
 
-            if let Some(head) = self.head {
+            if let Some(head) = *self.head.get() {
                 L::pointers(head).as_mut().set_prev(Some(ptr));
             }
 
-            self.head = Some(ptr);
+            *self.head.get() = Some(ptr);
         }
     }
 
     /// Removes the last element from a list and returns it, or None if it is
     /// empty.
-    pub(crate) fn pop_front(&mut self) -> Option<L::Handle> {
+    pub(crate) fn pop_front(&self) -> Option<L::Handle> {
+        let _head_lock = self.head_mutex.lock();
+        let _rm_lock = self.rm_mutex.lock();
         unsafe {
-            let first = self.head?;
-            self.head = L::pointers(first).as_ref().get_next();
+            let first = (*self.head.get())?;
+            *self.head.get() = L::pointers(first).as_ref().get_next();
 
             if let Some(next) = L::pointers(first).as_ref().get_next() {
                 L::pointers(next).as_mut().set_prev(None);
             } else {
-                self.head = None;
+                *self.head.get() = None;
             }
 
             L::pointers(first).as_mut().set_prev(None);
@@ -158,7 +169,9 @@ impl<L: Link> LinkedList2<L, L::Target> {
 
     /// Returns whether the linked list does not contain any node
     pub(crate) fn is_empty(&self) -> bool {
-        if self.head.is_some() {
+        let _head_lock = self.head_mutex.lock();
+        let _remove_lock = self.rm_mutex.lock();
+        if (unsafe { *self.head.get() }).is_some() {
             return false;
         }
         true
@@ -174,20 +187,34 @@ impl<L: Link> LinkedList2<L, L::Target> {
     /// - `node` is currently contained by some other `GuardedLinkedList` **and**
     ///   the caller has an exclusive access to that list. This condition is
     ///   used by the linked list in `sync::Notify`.
-    pub(crate) unsafe fn remove(&mut self, node: NonNull<L::Target>) -> Option<L::Handle> {
+    pub(crate) unsafe fn remove(&self, node: NonNull<L::Target>) -> Option<L::Handle> {
+        let remove_lock = self.rm_mutex.lock();
+        // 不是头节点，那么无需锁进行删除
+        let head_lock = {
+            if *self.head.get() != Some(node) {
+                None
+            } else {
+                Some(self.head_mutex.lock())
+            }
+        };
+
+        // 检查要删除的节点是否有前驱节点（prev）。如果有，我们将前驱节点的 next 指针设置为要删除节点的 next 指针。
+        // 这样，前驱节点将直接指向要删除节点的后继节点。
         if let Some(prev) = L::pointers(node).as_ref().get_prev() {
             debug_assert_eq!(L::pointers(prev).as_ref().get_next(), Some(node));
             L::pointers(prev)
                 .as_mut()
                 .set_next(L::pointers(node).as_ref().get_next());
         } else {
-            if self.head != Some(node) {
+            // 如果要删除的节点没有前驱节点，那么它应该是链表的头节点。在这种情况下，我们将链表头设置为要删除节点的后继节点。
+            // 如果要删除的节点不是链表头节点，那么返回 None，表示节点未被删除。
+            if head_lock.is_none() {
                 return None;
             }
-
-            self.head = L::pointers(node).as_ref().get_next();
+            *self.head.get() = L::pointers(node).as_ref().get_next();
         }
-
+        // 接下来，我们检查要删除的节点是否有后继节点（next）。如果有，
+        // 我们将后继节点的 prev 指针设置为要删除节点的 prev 指针。这样，后继节点将直接指向要删除节点的前驱节点。
         if let Some(next) = L::pointers(node).as_ref().get_next() {
             debug_assert_eq!(L::pointers(next).as_ref().get_prev(), Some(node));
             L::pointers(next)
@@ -195,6 +222,9 @@ impl<L: Link> LinkedList2<L, L::Target> {
                 .set_prev(L::pointers(node).as_ref().get_prev());
         }
 
+        drop(remove_lock);
+        drop(head_lock);
+        // 我们将要删除节点的 prev 和 next 指针设置为 None，表示节点已从链表中删除。然后，我们返回已删除节点的句柄。
         L::pointers(node).as_mut().set_next(None);
         L::pointers(node).as_mut().set_prev(None);
 
@@ -223,20 +253,6 @@ cfg_io_driver_impl! {
         list: &'a mut LinkedList2<T, T::Target>,
         filter: F,
         curr: Option<NonNull<T::Target>>,
-    }
-
-    impl<T: Link> LinkedList2<T, T::Target> {
-        pub(crate) fn drain_filter<F>(&mut self, filter: F) -> DrainFilter<'_, T, F>
-        where
-            F: FnMut(&T::Target) -> bool,
-        {
-            let curr = self.head;
-            DrainFilter {
-                curr,
-                filter,
-                list: self,
-            }
-        }
     }
 
     impl<'a, T, F> Iterator for DrainFilter<'a, T, F>
@@ -506,7 +522,7 @@ pub(crate) mod tests {
             assert!(list.remove(ptr(&a)).is_some());
             assert_clean!(a);
 
-            assert_ptr_eq!(b, list.head);
+            assert_ptr_eq!(b, *list.head.get());
             assert_ptr_eq!(c, b.pointers.get_next());
             assert_ptr_eq!(b, c.pointers.get_prev());
 
@@ -560,7 +576,7 @@ pub(crate) mod tests {
             // a should be no longer there and can't be removed twice
             assert!(list.remove(ptr(&a)).is_none());
 
-            assert_ptr_eq!(b, list.head);
+            assert_ptr_eq!(b, *list.head.get());
             assert_ptr_eq!(b, list.tail);
 
             assert!(b.pointers.get_next().is_none());
@@ -580,7 +596,7 @@ pub(crate) mod tests {
 
             assert_clean!(b);
 
-            assert_ptr_eq!(a, list.head);
+            assert_ptr_eq!(a, *list.head.get());
             assert_ptr_eq!(a, list.tail);
 
             assert!(a.pointers.get_next().is_none());
