@@ -1,7 +1,7 @@
 use super::{Shared, Synced};
 
 use crate::runtime::scheduler::Lock;
-use crate::runtime::task;
+use crate::runtime::task::{self, RawTask};
 
 use std::sync::atomic::Ordering::Release;
 
@@ -31,20 +31,22 @@ impl<T: 'static> Shared<T> {
         L: Lock<Synced>,
     {
         let num = batch_tasks.len();
+
+        // Safety: The sctructure of `RawTask` is the same as `Notified`
+        let tasks: Vec<RawTask> = unsafe {
+            let ptr = batch_tasks.as_ptr() as *const RawTask;
+            let cap = batch_tasks.capacity();
+            std::mem::forget(batch_tasks);
+            Vec::from_raw_parts(ptr as *mut RawTask, num, cap)
+        };
+
         let mut synced = shared.lock();
         if synced.as_mut().is_closed {
             drop(synced);
-            drop(batch_tasks);
+            drop(tasks);
             return;
         }
-        let synced = synced.as_mut();
-
-        synced.push_batch(
-            batch_tasks
-                .into_iter()
-                .map(|task| task.into_raw())
-                .collect::<Vec<_>>(),
-        );
+        synced.as_mut().push_batch(tasks);
 
         // Increment the count.
         //
