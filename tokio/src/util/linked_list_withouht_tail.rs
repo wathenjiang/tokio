@@ -148,8 +148,8 @@ impl<L: Link> LinkedList2<L, L::Target> {
     /// Removes the last element from a list and returns it, or None if it is
     /// empty.
     pub(crate) fn pop_front(&self) -> Option<L::Handle> {
-        let _head_lock = self.head_mutex.lock();
         let _rm_lock = self.rm_mutex.lock();
+        let _head_lock = self.head_mutex.lock();
         unsafe {
             let first = (*self.head.get())?;
             *self.head.get() = L::pointers(first).as_ref().get_next();
@@ -169,8 +169,8 @@ impl<L: Link> LinkedList2<L, L::Target> {
 
     /// Returns whether the linked list does not contain any node
     pub(crate) fn is_empty(&self) -> bool {
-        let _head_lock = self.head_mutex.lock();
         let _remove_lock = self.rm_mutex.lock();
+        let _head_lock = self.head_mutex.lock();
         if (unsafe { *self.head.get() }).is_some() {
             return false;
         }
@@ -189,42 +189,43 @@ impl<L: Link> LinkedList2<L, L::Target> {
     ///   used by the linked list in `sync::Notify`.
     pub(crate) unsafe fn remove(&self, node: NonNull<L::Target>) -> Option<L::Handle> {
         let remove_lock = self.rm_mutex.lock();
-        // 不是头节点，那么无需锁进行删除
-        let head_lock = {
-            if *self.head.get() != Some(node) {
-                None
-            } else {
-                Some(self.head_mutex.lock())
-            }
-        };
 
-        // 检查要删除的节点是否有前驱节点（prev）。如果有，我们将前驱节点的 next 指针设置为要删除节点的 next 指针。
-        // 这样，前驱节点将直接指向要删除节点的后继节点。
-        if let Some(prev) = L::pointers(node).as_ref().get_prev() {
-            debug_assert_eq!(L::pointers(prev).as_ref().get_next(), Some(node));
-            L::pointers(prev)
-                .as_mut()
-                .set_next(L::pointers(node).as_ref().get_next());
+        if *self.head.get() == Some(node) {
+            // double check
+            let _head_lock = self.head_mutex.lock();
+            // if node is the head
+            if *self.head.get() == Some(node) {
+                *self.head.get() = L::pointers(node).as_ref().get_next();
+            }
         } else {
-            // 如果要删除的节点没有前驱节点，那么它应该是链表的头节点。在这种情况下，我们将链表头设置为要删除节点的后继节点。
-            // 如果要删除的节点不是链表头节点，那么返回 None，表示节点未被删除。
-            if head_lock.is_none() {
+            // node is not the head
+            if let Some(prev) = L::pointers(node).as_ref().get_prev() {
+                // Perform deletion only if the node is in the list
+                if L::pointers(prev).as_ref().get_next() == Some(node) {
+                    L::pointers(prev)
+                        .as_mut()
+                        .set_next(L::pointers(node).as_ref().get_next());
+                }
+                if let Some(next) = L::pointers(node).as_ref().get_next() {
+                    debug_assert_eq!(L::pointers(next).as_ref().get_prev(), Some(node));
+                    L::pointers(next)
+                        .as_mut()
+                        .set_prev(L::pointers(node).as_ref().get_prev());
+                }
+
+                L::pointers(node).as_mut().set_next(None);
+                L::pointers(node).as_mut().set_prev(None);
+
+                drop(remove_lock);
+                return Some(L::from_raw(node));
+            } else {
+                // The node is not in the list
+                drop(remove_lock);
                 return None;
             }
-            *self.head.get() = L::pointers(node).as_ref().get_next();
-        }
-        // 接下来，我们检查要删除的节点是否有后继节点（next）。如果有，
-        // 我们将后继节点的 prev 指针设置为要删除节点的 prev 指针。这样，后继节点将直接指向要删除节点的前驱节点。
-        if let Some(next) = L::pointers(node).as_ref().get_next() {
-            debug_assert_eq!(L::pointers(next).as_ref().get_prev(), Some(node));
-            L::pointers(next)
-                .as_mut()
-                .set_prev(L::pointers(node).as_ref().get_prev());
         }
 
         drop(remove_lock);
-        drop(head_lock);
-        // 我们将要删除节点的 prev 和 next 指针设置为 None，表示节点已从链表中删除。然后，我们返回已删除节点的句柄。
         L::pointers(node).as_mut().set_next(None);
         L::pointers(node).as_mut().set_prev(None);
 
