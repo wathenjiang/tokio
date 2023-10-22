@@ -107,32 +107,36 @@ impl<S: 'static> OwnedTasks<S> {
         task: T,
         scheduler: S,
         id: super::Id,
-    ) -> (JoinHandle<T::Output>, Option<Notified<S>>)
+    ) -> (JoinHandle<T::Output>, Notified<S>)
     where
         S: Schedule,
         T: Future + Send + 'static,
         T::Output: Send + 'static,
     {
-        let (task, notified, join) = super::new_task(task, scheduler, id);
-        let notified = unsafe { self.bind_inner(task, notified) };
+        let (notified, join) = super::new_task(task, scheduler, id);
         (join, notified)
     }
 
     /// The part of `bind` that's the same for every type of future.
-    unsafe fn bind_inner(&self, task: Task<S>, notified: Notified<S>) -> Option<Notified<S>>
+    pub(crate) unsafe fn bind_inner(&self, notified: Notified<S>) -> Option<Notified<S>>
     where
         S: Schedule,
     {
-        unsafe {
-            // safety: We just created the task, so we have exclusive access
-            // to the field.
-            task.header().set_owner_id(self.id);
+        let task = Task::new(notified.into_raw());
+        if task.header().get_owner_id().is_none() {
+            unsafe {
+                // safety: we have exclusive access to the field.
+                task.header().set_owner_id(self.id);
+            }
         }
-        self.push_inner(task, notified)
+        if let Some(task) = self.push_inner(task) {
+            return Some(Notified(task));
+        }
+        None
     }
 
     #[inline]
-    pub(crate) fn push_inner(&self, task: Task<S>, notified: Notified<S>) -> Option<Notified<S>>
+    pub(crate) fn push_inner(&self, task: Task<S>) -> Option<Task<S>>
     where
         S: Schedule,
     {
@@ -147,9 +151,12 @@ impl<S: 'static> OwnedTasks<S> {
             task.shutdown();
             return None;
         }
-        lock.push_front(task);
+        lock.push_front(Task {
+            raw: task.raw,
+            _p: PhantomData,
+        });
         self.count.fetch_add(1, Ordering::Relaxed);
-        Some(notified)
+        Some(task)
     }
 
     /// Asserts that the given task is owned by this OwnedTasks and convert it to
@@ -281,24 +288,13 @@ impl<S: 'static> LocalOwnedTasks<S> {
         T: Future + 'static,
         T::Output: 'static,
     {
-        let (task, notified, join) = super::new_task(task, scheduler, id);
-
-        unsafe {
-            // safety: We just created the task, so we have exclusive access
-            // to the field.
-            task.header().set_owner_id(self.id);
-        }
+        let (notified, join) = super::new_task(task, scheduler, id);
 
         if self.is_closed() {
             drop(notified);
-            task.shutdown();
-            (join, None)
-        } else {
-            self.with_inner(|inner| {
-                inner.list.push_front(task);
-            });
-            (join, Some(notified))
+            return (join, None);
         }
+        (join, Some(notified))
     }
 
     /// Shuts down all tasks in the collection. This call also closes the

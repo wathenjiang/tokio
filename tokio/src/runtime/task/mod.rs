@@ -286,24 +286,20 @@ cfg_rt! {
         task: T,
         scheduler: S,
         id: Id,
-    ) -> (Task<S>, Notified<S>, JoinHandle<T::Output>)
+    ) -> (Notified<S>, JoinHandle<T::Output>)
     where
         S: Schedule,
         T: Future + 'static,
         T::Output: 'static,
     {
         let raw = RawTask::new::<T, S>(task, scheduler, id);
-        let task = Task {
-            raw,
-            _p: PhantomData,
-        };
         let notified = Notified(Task {
             raw,
             _p: PhantomData,
         });
         let join = JoinHandle::new(raw);
 
-        (task, notified, join)
+        (notified, join)
     }
 
     /// Creates a new task with an associated join handle. This method is used
@@ -316,15 +312,14 @@ cfg_rt! {
         T: Send + Future + 'static,
         T::Output: Send + 'static,
     {
-        let (task, notified, join) = new_task(task, scheduler, id);
+        let (notified, join) = new_task(task, scheduler, id);
 
         // This transfers the ref-count of task and notified into an UnownedTask.
         // This is valid because an UnownedTask holds two ref-counts.
         let unowned = UnownedTask {
-            raw: task.raw,
+            raw: notified.0.raw,
             _p: PhantomData,
         };
-        std::mem::forget(task);
         std::mem::forget(notified);
 
         (unowned, join)

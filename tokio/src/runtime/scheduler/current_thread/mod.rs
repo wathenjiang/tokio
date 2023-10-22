@@ -434,9 +434,7 @@ impl Handle {
     {
         let (handle, notified) = me.shared.owned.bind(future, me.clone(), id);
 
-        if let Some(notified) = notified {
-            me.schedule(notified);
-        }
+        me.schedule(notified);
 
         handle
     }

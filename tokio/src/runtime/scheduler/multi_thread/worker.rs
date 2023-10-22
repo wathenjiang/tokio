@@ -524,7 +524,9 @@ impl Context {
 
             // First, check work available to the current worker.
             if let Some(task) = core.next_task(&self.worker) {
-                core = self.run_task(task, core)?;
+                if let Some(task) = unsafe { self.worker.handle.shared.owned.bind_inner(task) } {
+                    core = self.run_task(task, core)?;
+                }
                 continue;
             }
 
@@ -555,7 +557,6 @@ impl Context {
 
     fn run_task(&self, task: Notified, mut core: Box<Core>) -> RunResult {
         let task = self.worker.handle.shared.owned.assert_owner(task);
-
         // Make sure the worker is not in the **searching** state. This enables
         // another idle worker to try to steal work.
         core.transition_from_searching(&self.worker);
@@ -573,6 +574,8 @@ impl Context {
 
         // Run the task
         coop::budget(|| {
+            // try add this task to ownedTasks
+
             task.run();
             let mut lifo_polls = 0;
 
@@ -1034,12 +1037,6 @@ impl Handle {
             self.push_remote_task(task);
             self.notify_parked_remote();
         })
-    }
-
-    pub(super) fn schedule_option_task_without_yield(&self, task: Option<Notified>) {
-        if let Some(task) = task {
-            self.schedule_task(task, false);
-        }
     }
 
     fn schedule_local(&self, core: &mut Core, task: Notified, is_yield: bool) {
