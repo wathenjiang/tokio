@@ -122,15 +122,13 @@ impl<S: 'static> OwnedTasks<S> {
     where
         S: Schedule,
     {
-        let is_owned = task.header().get_is_owned();
-        if !is_owned{
+        if task.header().get_owner_id().is_none() {
             unsafe {
                 // safety: we have exclusive access to the field.
                 task.header().set_owner_id(self.id);
-                task.header().set_is_owned(true);
             }
-            self.push_inner(task);
-        } 
+        }
+        self.push_inner(task);
     }
 
     #[inline]
@@ -210,10 +208,6 @@ impl<S: 'static> OwnedTasks<S> {
     }
 
     pub(crate) fn remove(&self, task: &Task<S>) -> Option<Task<S>> {
-        // if task is not owned, OwnedTasks do not has this task
-        if !task.header().get_is_owned(){
-            return Some(Task{ raw: task.raw, _p: PhantomData });
-        }
         // If the task's owner ID is `None` then it is not part of any list and
         // doesn't need removing.
         let task_id = task.header().get_owner_id()?;
@@ -300,6 +294,24 @@ impl<S: 'static> LocalOwnedTasks<S> {
             return (join, None);
         }
         (join, Some(notified))
+    }
+
+    /// The part of `bind` that's the same for every type of future.
+    pub(crate) unsafe fn bind_inner(&self, task: Task<S>)
+    where
+        S: Schedule,
+    {
+        if task.header().get_owner_id().is_none() {
+            unsafe {
+                // safety: we have exclusive access to the field.
+                task.header().set_owner_id(self.id);
+            }
+        }
+        self.with_inner(|inner| {
+            {
+                inner.list.push_front(task)
+            };
+        })
     }
 
     /// Shuts down all tasks in the collection. This call also closes the

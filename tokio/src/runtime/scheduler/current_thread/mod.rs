@@ -622,8 +622,9 @@ impl Schedule for Arc<Handle> {
         }
     }
 
-    fn bind_task_to_owned(&self, task:Task<Self>) {
-        // TODO: todo!
+    fn bind_owned(&self, task:Task<Self>) {
+        // safety: task is beeing scheduled exclusively
+        unsafe{self.shared.owned.bind_inner(task)};
     }
     
 }

@@ -19,6 +19,10 @@ mod noop_scheduler {
         fn schedule(&self, _task: task::Notified<Self>) {
             unreachable!();
         }
+
+        fn bind_owned(&self, _task: Task<Self>) {
+            // NoopSchedule do not have an OwnedTasks
+        }
     }
 }
 

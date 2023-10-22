@@ -171,8 +171,8 @@ where
                 self.dealloc();
             }
             PollFuture::Done => {
-                self.core().scheduler.bind_task_to_owned(self.get_new_task());
-            },
+                self.core().scheduler.bind_owned(self.get_new_task());
+            }
         }
     }
 

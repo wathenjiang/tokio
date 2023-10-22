@@ -58,9 +58,7 @@ impl task::Schedule for BlockingSchedule {
         unreachable!();
     }
 
-    fn bind_task_to_owned(&self, task:Task<Self>) {
-        //TODO: todo!
+    fn bind_owned(&self, _task:Task<Self>) {
+        // blocking scheduler does not have a OwnedTasks, so do nothing here
     }
-
-    
 }

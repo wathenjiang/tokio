@@ -1016,7 +1016,8 @@ impl task::Schedule for Arc<Handle> {
         self.schedule_task(task, true);
     }
 
-    fn bind_task_to_owned(&self, task: task::Task<Self>) {
+    fn bind_owned(&self, task: task::Task<Self>) {
+        // safety: task is beeing scheduled exclusively
         unsafe { self.shared.owned.bind_inner(task) }
     }
 }

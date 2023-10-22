@@ -271,8 +271,8 @@ pub(crate) trait Schedule: Sync + Sized + 'static {
         self.schedule(task);
     }
 
-    /// Because the scheduling queue does not currently hold a reference to the task, we store the task into OwnedTasks
-    fn bind_task_to_owned(&self, task:Task<Self>);
+    /// The scheduler does not currently hold a reference to the task, we should store the task into OwnedTasks
+    fn bind_owned(&self, task:Task<Self>);
 
     /// Polling the task resulted in a panic. Should the runtime shutdown?
     fn unhandled_panic(&self) {

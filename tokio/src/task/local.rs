@@ -1048,10 +1048,10 @@ impl task::Schedule for Arc<Shared> {
         }
     }
 
-    fn bind_task_to_owned(&self, task: Task<Self>) {
-        // TODO: todo!
+    fn bind_owned(&self, task: Task<Self>) {
+        // safety: task is beeing scheduled exclusively
+        unsafe { self.local_state.owned.bind_inner(task) };
     }
-    
 }
 
 impl LocalState {
