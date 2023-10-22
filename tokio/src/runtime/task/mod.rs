@@ -397,6 +397,13 @@ impl<S: Schedule> LocalNotified<S> {
         mem::forget(self);
         raw.poll();
     }
+
+    // Shutdown the task.
+    pub(crate) fn shutdown(self){
+        let raw = self.task.raw;
+        mem::forget(self);
+        raw.shutdown();
+    }
 }
 
 impl<S: Schedule> UnownedTask<S> {

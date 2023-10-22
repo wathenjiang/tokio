@@ -159,7 +159,6 @@ impl<S: 'static> OwnedTasks<S> {
     /// a LocalNotified, giving the thread permission to poll this task.
     #[inline]
     pub(crate) fn assert_owner(&self, task: Notified<S>) -> LocalNotified<S> {
-        // TODO: we might be able to delete this assert
         if task.header().get_owner_id().is_some() {
             debug_assert_eq!(task.header().get_owner_id(), Some(self.id));
         }
@@ -169,6 +168,20 @@ impl<S: 'static> OwnedTasks<S> {
             task: task.0,
             _not_send: PhantomData,
         }
+    }
+
+    /// If the given task is unowned, then convert it to a LocalNotified, and return the LocalNotified, giving the thread permission to shutdown this task.
+    #[inline]
+    pub(crate) fn get_unowned_notify(&self, task: Notified<S>) -> Option<LocalNotified<S>> {
+        if task.header().get_owner_id().is_none() {
+            // safety: All tasks bound to this OwnedTasks are Send, so it is safe
+            // to poll it on this thread no matter what thread we are on.
+            return Some(LocalNotified {
+                task: task.0,
+                _not_send: PhantomData,
+            });
+        }
+        None
     }
 
     /// Shuts down all tasks in the collection. This call also closes the

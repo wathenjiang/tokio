@@ -546,7 +546,7 @@ impl Context {
                 };
             }
         }
-
+        core.scheduler_shutdown(&self.worker);
         core.pre_shutdown(&self.worker);
         // Signal shutdown
         self.worker.handle.shutdown_core(core);
@@ -572,8 +572,6 @@ impl Context {
 
         // Run the task
         coop::budget(|| {
-            // try add this task to ownedTasks
-
             task.run();
             let mut lifo_polls = 0;
 
@@ -952,6 +950,28 @@ impl Core {
         }
     }
 
+    fn scheduler_shutdown(&mut self, worker: &Worker) {
+        if let Some(task) = self.lifo_slot.take() {
+            if let Some(task) = worker.handle.shared.owned.get_unowned_notify(task) {
+                task.shutdown();
+            }
+        }
+
+        // Drain the local queue, and shutdown the owned tasks
+        while let Some(task) = self.next_local_task() {
+            if let Some(task) = worker.handle.shared.owned.get_unowned_notify(task) {
+                task.shutdown();
+            }
+        }
+
+        // Drain the injection queue, and shutdown the owned tasks
+        while let Some(task) = worker.handle.next_remote_task() {
+            if let Some(task) = worker.handle.shared.owned.get_unowned_notify(task) {
+                task.shutdown();
+            } 
+        }
+    }
+
     /// Signals all tasks to shut down, and waits for them to complete. Must run
     /// before we enter the single-threaded phase of shutdown processing.
     fn pre_shutdown(&mut self, worker: &Worker) {
@@ -974,9 +994,6 @@ impl Core {
     fn shutdown(&mut self, handle: &Handle) {
         // Take the core
         let mut park = self.park.take().expect("park missing");
-
-        // Drain the queue
-        while self.next_local_task().is_some() {}
 
         park.shutdown(&handle.driver);
     }
@@ -1164,13 +1181,6 @@ impl Handle {
 
         for mut core in cores.drain(..) {
             core.shutdown(self);
-        }
-
-        // Drain the injection queue
-        //
-        // We already shut down every task, so we can simply drop the tasks.
-        while let Some(task) = self.next_remote_task() {
-            drop(task);
         }
     }
 
