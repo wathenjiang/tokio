@@ -621,6 +621,11 @@ impl Schedule for Arc<Handle> {
             }
         }
     }
+
+    fn bind_task_to_owned(&self, task:Task<Self>) {
+        // TODO: todo!
+    }
+    
 }
 
 impl Wake for Handle {

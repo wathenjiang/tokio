@@ -118,21 +118,19 @@ impl<S: 'static> OwnedTasks<S> {
     }
 
     /// The part of `bind` that's the same for every type of future.
-    pub(crate) unsafe fn bind_inner(&self, notified: Notified<S>) -> Option<Notified<S>>
+    pub(crate) unsafe fn bind_inner(&self, task: Task<S>)
     where
         S: Schedule,
     {
-        let task = Task::new(notified.into_raw());
-        if task.header().get_owner_id().is_none() {
+        let is_owned = task.header().get_is_owned();
+        if !is_owned{
             unsafe {
                 // safety: we have exclusive access to the field.
                 task.header().set_owner_id(self.id);
+                task.header().set_is_owned(true);
             }
-        }
-        if let Some(task) = self.push_inner(task) {
-            return Some(Notified(task));
-        }
-        None
+            self.push_inner(task);
+        } 
     }
 
     #[inline]
@@ -163,7 +161,10 @@ impl<S: 'static> OwnedTasks<S> {
     /// a LocalNotified, giving the thread permission to poll this task.
     #[inline]
     pub(crate) fn assert_owner(&self, task: Notified<S>) -> LocalNotified<S> {
-        debug_assert_eq!(task.header().get_owner_id(), Some(self.id));
+        // TODO: we might be able to delete this assert
+        if task.header().get_owner_id().is_some() {
+            debug_assert_eq!(task.header().get_owner_id(), Some(self.id));
+        }
         // safety: All tasks bound to this OwnedTasks are Send, so it is safe
         // to poll it on this thread no matter what thread we are on.
         LocalNotified {
@@ -209,6 +210,10 @@ impl<S: 'static> OwnedTasks<S> {
     }
 
     pub(crate) fn remove(&self, task: &Task<S>) -> Option<Task<S>> {
+        // if task is not owned, OwnedTasks do not has this task
+        if !task.header().get_is_owned(){
+            return Some(Task{ raw: task.raw, _p: PhantomData });
+        }
         // If the task's owner ID is `None` then it is not part of any list and
         // doesn't need removing.
         let task_id = task.header().get_owner_id()?;

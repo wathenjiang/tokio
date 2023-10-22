@@ -57,4 +57,10 @@ impl task::Schedule for BlockingSchedule {
     fn schedule(&self, _task: task::Notified<Self>) {
         unreachable!();
     }
+
+    fn bind_task_to_owned(&self, task:Task<Self>) {
+        //TODO: todo!
+    }
+
+    
 }

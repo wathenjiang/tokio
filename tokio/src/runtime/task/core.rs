@@ -170,6 +170,8 @@ pub(crate) struct Header {
     /// removed from the list.
     pub(super) owner_id: UnsafeCell<Option<NonZeroU64>>,
 
+    pub(super) is_owned: UnsafeCell<bool>,
+
     /// The tracing ID for this instrumented task.
     #[cfg(all(tokio_unstable, feature = "tracing"))]
     pub(super) tracing_id: Option<tracing::Id>,
@@ -217,6 +219,7 @@ impl<T: Future, S: Schedule> Cell<T, S> {
                 queue_next: UnsafeCell::new(None),
                 vtable,
                 owner_id: UnsafeCell::new(None),
+                is_owned: UnsafeCell::new(false),
                 #[cfg(all(tokio_unstable, feature = "tracing"))]
                 tracing_id,
             }
@@ -399,6 +402,19 @@ impl Header {
         // safety: If there are concurrent writes, then that write has violated
         // the safety requirements on `set_owner_id`.
         unsafe { self.owner_id.with(|ptr| *ptr) }
+    }
+
+    // safety: The caller must guarantee exclusive access to this field, and
+    // must ensure that the id is either `None` or the id of the OwnedTasks
+    // containing this task.
+    pub(super) unsafe fn set_is_owned(&self, is_owed: bool) {
+        self.is_owned.with_mut(|ptr| *ptr = is_owed);
+    }
+
+    pub(super) fn get_is_owned(&self) -> bool {
+        // safety: If there are concurrent writes, then that write has violated
+        // the safety requirements on `set_owner_id`.
+        unsafe { self.is_owned.with(|ptr| *ptr) }
     }
 
     /// Gets a pointer to the `Trailer` of the task containing this `Header`.

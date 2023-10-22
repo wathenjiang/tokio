@@ -170,7 +170,9 @@ where
             PollFuture::Dealloc => {
                 self.dealloc();
             }
-            PollFuture::Done => (),
+            PollFuture::Done => {
+                self.core().scheduler.bind_task_to_owned(self.get_new_task());
+            },
         }
     }
 

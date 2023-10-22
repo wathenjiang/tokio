@@ -1047,6 +1047,11 @@ impl task::Schedule for Arc<Shared> {
             }
         }
     }
+
+    fn bind_task_to_owned(&self, task: Task<Self>) {
+        // TODO: todo!
+    }
+    
 }
 
 impl LocalState {

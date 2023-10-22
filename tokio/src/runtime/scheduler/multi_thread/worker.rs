@@ -524,9 +524,7 @@ impl Context {
 
             // First, check work available to the current worker.
             if let Some(task) = core.next_task(&self.worker) {
-                if let Some(task) = unsafe { self.worker.handle.shared.owned.bind_inner(task) } {
-                    core = self.run_task(task, core)?;
-                }
+                core = self.run_task(task, core)?;
                 continue;
             }
 
@@ -1016,6 +1014,10 @@ impl task::Schedule for Arc<Handle> {
 
     fn yield_now(&self, task: Notified) {
         self.schedule_task(task, true);
+    }
+
+    fn bind_task_to_owned(&self, task: task::Task<Self>) {
+        unsafe { self.shared.owned.bind_inner(task) }
     }
 }
 
