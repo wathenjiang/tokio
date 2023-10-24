@@ -54,15 +54,14 @@ const REF_ONE: usize = 1 << REF_COUNT_SHIFT;
 
 /// State a task is initialized with.
 ///
-/// A task is initialized with three references:
+/// A task is initialized with two references:
 ///
-///  * A reference that will be stored in an OwnedTasks or LocalOwnedTasks.
 ///  * A reference that will be sent to the scheduler as an ordinary notification.
 ///  * A reference for the JoinHandle.
 ///
 /// As the task starts with a `JoinHandle`, `JOIN_INTEREST` is set.
 /// As the task starts with a `Notified`, `NOTIFIED` is set.
-const INITIAL_STATE: usize = (REF_ONE * 3) | JOIN_INTEREST | NOTIFIED;
+const INITIAL_STATE: usize = (REF_ONE * 2) | JOIN_INTEREST | NOTIFIED;
 
 #[must_use]
 pub(super) enum TransitionToRunning {
@@ -453,7 +452,10 @@ impl State {
     /// Returns `true` if the task should be released.
     pub(super) fn ref_dec(&self) -> bool {
         let prev = Snapshot(self.val.fetch_sub(REF_ONE, AcqRel));
-        assert!(prev.ref_count() >= 1);
+        let res = prev.ref_count() >= 1;
+        if !res{
+            panic!("ref error");
+        }
         prev.ref_count() == 1
     }
 

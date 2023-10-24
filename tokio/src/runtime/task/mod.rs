@@ -296,6 +296,7 @@ cfg_rt! {
         T::Output: 'static,
     {
         let raw = RawTask::new::<T, S>(task, scheduler, id);
+        raw.ref_inc();
         let notified = Notified(Task {
             raw,
             _p: PhantomData,
@@ -462,7 +463,7 @@ impl<S: 'static> Drop for Task<S> {
 impl<S: 'static> Drop for UnownedTask<S> {
     fn drop(&mut self) {
         // Decrement the ref count
-        if self.raw.header().state.ref_dec_twice() {
+        if self.raw.header().state.ref_dec() {
             // Deallocate if this is the final ref count
             self.raw.dealloc();
         }

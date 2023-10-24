@@ -127,8 +127,8 @@ impl<S: 'static> OwnedTasks<S> {
                 // safety: we have exclusive access to the field.
                 task.header().set_owner_id(self.id);
             }
+            self.push_inner(task);
         }
-        self.push_inner(task);
     }
 
     #[inline]
@@ -138,6 +138,8 @@ impl<S: 'static> OwnedTasks<S> {
     {
         // Safety: it is safe, because every task has one task_id
         let task_id = unsafe { Header::get_id(task.header_ptr()) };
+        // The OwnedTasks now has a reference to this task
+        task.raw.ref_inc();
         let mut lock = self.segment_inner(task_id.0 as usize);
 
         // check close flag,
