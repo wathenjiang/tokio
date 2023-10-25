@@ -454,7 +454,7 @@ impl State {
         let prev = Snapshot(self.val.fetch_sub(REF_ONE, AcqRel));
         let res = prev.ref_count() >= 1;
         if !res{
-            panic!("ref error");
+            panic!("ref error: {}", prev.ref_count());
         }
         prev.ref_count() == 1
     }

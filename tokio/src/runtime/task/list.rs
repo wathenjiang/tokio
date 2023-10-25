@@ -128,11 +128,13 @@ impl<S: 'static> OwnedTasks<S> {
                 task.header().set_owner_id(self.id);
             }
             self.push_inner(task);
+        }else{
+            std::mem::forget(task);
         }
     }
 
     #[inline]
-    pub(crate) fn push_inner(&self, task: Task<S>) -> Option<Task<S>>
+    pub(crate) fn push_inner(&self, task: Task<S>)
     where
         S: Schedule,
     {
@@ -147,14 +149,10 @@ impl<S: 'static> OwnedTasks<S> {
         if self.closed.load(Ordering::Acquire) {
             drop(lock);
             task.shutdown();
-            return None;
+            return;
         }
-        lock.push_front(Task {
-            raw: task.raw,
-            _p: PhantomData,
-        });
+        lock.push_front(task);
         self.count.fetch_add(1, Ordering::Relaxed);
-        Some(task)
     }
 
     /// Asserts that the given task is owned by this OwnedTasks and convert it to
@@ -320,13 +318,15 @@ impl<S: 'static> LocalOwnedTasks<S> {
             unsafe {
                 // safety: we have exclusive access to the field.
                 task.header().set_owner_id(self.id);
+                // now LocalOwnedTaks has ref to this tasks
+                task.raw.ref_inc();
             }
+            self.with_inner(|inner| {
+                {
+                    inner.list.push_front(task)
+                };
+            })
         }
-        self.with_inner(|inner| {
-            {
-                inner.list.push_front(task)
-            };
-        })
     }
 
     /// Shuts down all tasks in the collection. This call also closes the

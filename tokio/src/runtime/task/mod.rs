@@ -272,7 +272,7 @@ pub(crate) trait Schedule: Sync + Sized + 'static {
     }
 
     /// The scheduler does not currently hold a reference to the task, we should store the task into OwnedTasks
-    fn bind_owned(&self, task:Task<Self>);
+    fn bind_owned(&self, task: Task<Self>);
 
     /// Polling the task resulted in a panic. Should the runtime shutdown?
     fn unhandled_panic(&self) {
@@ -400,7 +400,7 @@ impl<S: Schedule> LocalNotified<S> {
     }
 
     // Shutdown the task.
-    pub(crate) fn shutdown(self){
+    pub(crate) fn shutdown(self) {
         let raw = self.task.raw;
         mem::forget(self);
         raw.shutdown();
@@ -453,20 +453,32 @@ impl<S: Schedule> UnownedTask<S> {
 impl<S: 'static> Drop for Task<S> {
     fn drop(&mut self) {
         // Decrement the ref count
-        if self.header().state.ref_dec() {
-            // Deallocate if this is the final ref count
-            self.raw.dealloc();
-        }
+        self.header().owner_id.with(|id| {
+            unsafe {
+                if id.as_ref().is_some() {
+                    if self.header().state.ref_dec() {
+                        // Deallocate if this is the final ref count
+                        self.raw.dealloc();
+                    }
+                }
+            }
+        });
     }
 }
 
 impl<S: 'static> Drop for UnownedTask<S> {
     fn drop(&mut self) {
-        // Decrement the ref count
-        if self.raw.header().state.ref_dec() {
-            // Deallocate if this is the final ref count
-            self.raw.dealloc();
-        }
+        self.raw.header().owner_id.with(|id| {
+            unsafe {
+                if id.as_ref().is_some() {
+                    // Decrement the ref count
+                    if self.raw.header().state.ref_dec() {
+                        // Deallocate if this is the final ref count
+                        self.raw.dealloc();
+                    }
+                }
+            }
+        });
     }
 }
 
