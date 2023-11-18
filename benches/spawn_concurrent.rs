@@ -27,7 +27,7 @@ fn spawn_tasks_current_thread_parallel(c: &mut Criterion) {
         b.iter_custom(|iters| {
             let start = Instant::now();
             runtime.block_on(async {
-                black_box(spawn_job(iters as usize, num_cpus::get_physical() * 2).await);
+                black_box(spawn_job(iters as usize, num_cpus::get_physical()).await);
             });
             start.elapsed()
         })
@@ -96,7 +96,7 @@ fn spawn_tasks_parallel_multi_thread<const W: usize,const S: usize>(g: &mut Benc
         b.iter_custom(|iters| {
             let start = Instant::now();
             runtime.block_on(async {
-                black_box(spawn_job(iters as usize, num_cpus::get_physical()).await);
+                black_box(spawn_job(iters as usize, W).await);
             });
             start.elapsed()
         })
@@ -148,7 +148,7 @@ fn bench_shutdown_parallel_multi_thread2(c: &mut Criterion) {
     shutdown_tasks_parallel::<8,8>(&mut group);
     shutdown_tasks_parallel::<16,8>(&mut group);
     shutdown_tasks_parallel::<32,8>(&mut group);
-    shutdown_tasks_parallel::<64,8>(&mut group);
+    shutdown_tasks_parallel::<64, 8>(&mut group);
     group.finish();
 }
 
@@ -161,7 +161,7 @@ fn shutdown_tasks_parallel<const W: usize,const S: usize>(g: &mut BenchmarkGroup
                 .build()
                 .unwrap();
             runtime.block_on(async {
-                black_box(job_shutdown(iters as usize, num_cpus::get_physical()).await);
+                black_box(job_shutdown(iters as usize, W).await);
             });
             let start = Instant::now();
             drop(runtime);
