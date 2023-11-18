@@ -76,13 +76,14 @@ fn bench_parallel_spawn_multi_thread(c: &mut Criterion) {
 
 fn bench_parallel_spawn_multi_thread2(c: &mut Criterion) {
     let mut group = c.benchmark_group("spawn_parallel_multi_thread2");
-    spawn_tasks_parallel_multi_thread::<1,8>(&mut group);
-    spawn_tasks_parallel_multi_thread::<2,8>(&mut group);
-    spawn_tasks_parallel_multi_thread::<4,8>(&mut group);
-    spawn_tasks_parallel_multi_thread::<8,8>(&mut group);
-    spawn_tasks_parallel_multi_thread::<16,8>(&mut group);
-    spawn_tasks_parallel_multi_thread::<32,8>(&mut group);
-    spawn_tasks_parallel_multi_thread::<64,8>(&mut group);
+    let ws:[usize;8] = [1,2,4,8,16,32,64,128];
+    let ss:[usize;12] = [1,2,4,8,16,32,64,128,256,512,1024,2048];
+
+    for w in ws{
+        for s in ss{
+            spawn_tasks_parallel_multi_thread2(&mut group,w,s);
+        }
+    }
 }
 
 
@@ -97,6 +98,23 @@ fn spawn_tasks_parallel_multi_thread<const W: usize,const S: usize>(g: &mut Benc
             let start = Instant::now();
             runtime.block_on(async {
                 black_box(spawn_job(iters as usize, W).await);
+            });
+            start.elapsed()
+        })
+    });
+}
+
+fn spawn_tasks_parallel_multi_thread2(g: &mut BenchmarkGroup<WallTime>, w : usize, s:usize) {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+    .worker_threads(w)
+        .spawn_concurrency_level(black_box(s))
+        .build()
+        .unwrap();
+    g.bench_function(format!("{:03}-{:04}",w, s), |b| {
+        b.iter_custom(|iters| {
+            let start = Instant::now();
+            runtime.block_on(async {
+                black_box(spawn_job(iters as usize, w).await);
             });
             start.elapsed()
         })
@@ -193,12 +211,12 @@ async fn job_shutdown(iters: usize, procs: usize) {
 
 criterion_group!(
     benches,
-    spawn_tasks_current_thread,
-    spawn_tasks_current_thread_parallel,
-    bench_create_runtime_multi_thread,
-    bench_parallel_spawn_multi_thread,
+    // spawn_tasks_current_thread,
+    // spawn_tasks_current_thread_parallel,
+    // bench_create_runtime_multi_thread,
+    // bench_parallel_spawn_multi_thread,
     bench_parallel_spawn_multi_thread2,
-    bench_shutdown_parallel_multi_thread,
-    bench_shutdown_parallel_multi_thread2
+    // bench_shutdown_parallel_multi_thread,
+    // bench_shutdown_parallel_multi_thread2
 );
 criterion_main!(benches);
