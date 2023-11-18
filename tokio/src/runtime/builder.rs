@@ -447,8 +447,6 @@ impl Builder {
     ///
     /// This will panic if `val` is not larger than `0`.
     #[track_caller]
-    #[cfg(tokio_unstable)]
-    #[cfg_attr(docsrs, doc(cfg(tokio_unstable)))]
     pub fn spawn_concurrency_level(&mut self, mut val: usize) -> &mut Self {
         const MAX_SPAWN_CONCURRENCY_LEVEL: usize = 1 << 16;
 
