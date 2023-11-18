@@ -76,13 +76,13 @@ fn bench_parallel_spawn_multi_thread(c: &mut Criterion) {
 
 fn bench_parallel_spawn_multi_thread2(c: &mut Criterion) {
     let mut group = c.benchmark_group("spawn_parallel_multi_thread2");
-    spawn_tasks_parallel_multi_thread::<1,128>(&mut group);
-    spawn_tasks_parallel_multi_thread::<2,128>(&mut group);
-    spawn_tasks_parallel_multi_thread::<4,128>(&mut group);
-    spawn_tasks_parallel_multi_thread::<8,128>(&mut group);
-    spawn_tasks_parallel_multi_thread::<16,128>(&mut group);
-    spawn_tasks_parallel_multi_thread::<32,128>(&mut group);
-    spawn_tasks_parallel_multi_thread::<64,128>(&mut group);
+    spawn_tasks_parallel_multi_thread::<1,8>(&mut group);
+    spawn_tasks_parallel_multi_thread::<2,8>(&mut group);
+    spawn_tasks_parallel_multi_thread::<4,8>(&mut group);
+    spawn_tasks_parallel_multi_thread::<8,8>(&mut group);
+    spawn_tasks_parallel_multi_thread::<16,8>(&mut group);
+    spawn_tasks_parallel_multi_thread::<32,8>(&mut group);
+    spawn_tasks_parallel_multi_thread::<64,8>(&mut group);
 }
 
 
@@ -142,14 +142,14 @@ fn bench_shutdown_parallel_multi_thread(c: &mut Criterion) {
 
 fn bench_shutdown_parallel_multi_thread2(c: &mut Criterion) {
     let mut group = c.benchmark_group("shutdown_runtime_multi_thread2");
-    shutdown_tasks_parallel::<1,128>(&mut group);
+    shutdown_tasks_parallel::<1,8>(&mut group);
     shutdown_tasks_parallel::<2,8>(&mut group);
-    shutdown_tasks_parallel::<4,32>(&mut group);
-    shutdown_tasks_parallel::<8,64>(&mut group);
-    shutdown_tasks_parallel::<16,128>(&mut group);
-    shutdown_tasks_parallel::<32,256>(&mut group);
-    shutdown_tasks_parallel::<64,512>(&mut group);
-        group.finish();
+    shutdown_tasks_parallel::<4,8>(&mut group);
+    shutdown_tasks_parallel::<8,8>(&mut group);
+    shutdown_tasks_parallel::<16,8>(&mut group);
+    shutdown_tasks_parallel::<32,8>(&mut group);
+    shutdown_tasks_parallel::<64,8>(&mut group);
+    group.finish();
 }
 
 fn shutdown_tasks_parallel<const W: usize,const S: usize>(g: &mut BenchmarkGroup<WallTime>) {
