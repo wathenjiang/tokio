@@ -63,8 +63,8 @@ impl Parker {
         }
     }
 
-    pub(crate) fn park(&mut self, handle: &driver::Handle) {
-        self.inner.park(handle);
+    pub(crate) fn park(&mut self, handle: &driver::Handle, index: usize) {
+        self.inner.park(handle, index);
     }
 
     pub(crate) fn park_timeout(&mut self, handle: &driver::Handle, duration: Duration) {
@@ -102,7 +102,7 @@ impl Unparker {
 
 impl Inner {
     /// Parks the current thread for at most `dur`.
-    fn park(&self, handle: &driver::Handle) {
+    fn park(&self, handle: &driver::Handle, index: usize) {
         // If we were previously notified then we consume this notification and
         // return quickly.
         if self
@@ -116,11 +116,11 @@ impl Inner {
         if let Some(mut driver) = self.shared.driver.try_lock() {
             self.park_driver(&mut driver, handle);
         } else {
-            self.park_condvar();
+            self.park_condvar(index);
         }
     }
 
-    fn park_condvar(&self) {
+    fn park_condvar(&self, index: usize) {
         // Otherwise we need to coordinate going to sleep
         let mut m = self.mutex.lock();
 
@@ -153,6 +153,7 @@ impl Inner {
                 .is_ok()
             {
                 // got a notification
+                println!("in-fact worker-{index} is unparked");
                 return;
             }
 

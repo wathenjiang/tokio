@@ -75,6 +75,7 @@ impl Idle {
         State::unpark_one(&self.state, 1);
 
         // Get the worker to unpark
+        println!("cur sleepers is {:?}", lock.idle.sleepers);
         let ret = lock.idle.sleepers.pop();
         debug_assert!(ret.is_some());
 
