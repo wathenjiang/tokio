@@ -145,6 +145,7 @@ impl Inner {
         }
 
         loop {
+            println!("worker-{index} is parked");
             m = self.condvar.wait(m).unwrap();
 
             if self

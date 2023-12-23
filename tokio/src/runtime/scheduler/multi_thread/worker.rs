@@ -1111,13 +1111,14 @@ impl Handle {
 
         if let Some(index) = self.shared.idle.worker_to_notify(&self.shared) {
             super::counters::inc_num_unparks_local();
+            println!("local try worker-{index} is unparked");
             self.shared.remotes[index].unpark.unpark(&self.driver);
         }
     }
 
     fn notify_parked_remote(&self) {
         if let Some(index) = self.shared.idle.worker_to_notify(&self.shared) {
-            println!("try worker-{index} is unparked");
+            println!("remote try worker-{index} is unparked");
             self.shared.remotes[index].unpark.unpark(&self.driver);
         }
     }
