@@ -87,9 +87,9 @@ cfg_not_taskdump! {
 }
 
 /// A scheduler worker
-pub(super) struct Worker {
+pub(crate) struct Worker {
     /// Reference to scheduler's handle
-    handle: Arc<Handle>,
+    pub(super) handle: Arc<Handle>,
 
     /// Index holding this worker's remote state
     index: usize,
@@ -155,7 +155,7 @@ pub(crate) struct Shared {
     pub(super) inject: inject::Shared<Arc<Handle>>,
 
     /// Coordinates idle workers
-    idle: Idle,
+    pub(super) idle: Idle,
 
     /// Collection of all active tasks spawned onto this executor.
     pub(crate) owned: OwnedTasks<Arc<Handle>>,
@@ -419,6 +419,7 @@ where
         // Once the blocking task is done executing, we will attempt to
         // steal the core back.
         let worker = cx.worker.clone();
+        worker.handle.shared.idle.inc_num_poll_driver();
         runtime::spawn_blocking(move || run(worker));
         Ok(())
     });
@@ -523,7 +524,11 @@ impl Context {
 
             // First, check work available to the current worker.
             if let Some(task) = core.next_task(&self.worker) {
+                if self.worker.handle.shared.idle.dec_num_poll_driver() {
+                    self.worker.handle.notify_parked_remote();
+                }
                 core = self.run_task(task, core)?;
+                self.worker.handle.shared.idle.inc_num_poll_driver();
                 continue;
             }
 
@@ -535,7 +540,11 @@ impl Context {
             if let Some(task) = core.steal_work(&self.worker) {
                 // Found work, switch back to processing
                 core.stats.start_processing_scheduled_tasks();
+                if self.worker.handle.shared.idle.dec_num_poll_driver() {
+                    self.worker.handle.notify_parked_remote();
+                }
                 core = self.run_task(task, core)?;
+                self.worker.handle.shared.idle.inc_num_poll_driver();
             } else {
                 // Wait for work
                 core = if !self.defer.is_empty() {
@@ -721,7 +730,7 @@ impl Context {
         if let Some(timeout) = duration {
             park.park_timeout(&self.worker.handle.driver, timeout);
         } else {
-            park.park(&self.worker.handle.driver);
+            park.park(&self.worker.handle.driver, &self.worker);
         }
 
         self.defer.wake();
@@ -935,7 +944,6 @@ impl Core {
         true
     }
 
-    /// Runs maintenance work such as checking the pool's state.
     fn maintenance(&mut self, worker: &Worker) {
         self.stats
             .submit(&worker.handle.shared.worker_metrics[worker.index]);

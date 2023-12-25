@@ -10,6 +10,8 @@ use crate::util::TryLock;
 use std::sync::atomic::Ordering::SeqCst;
 use std::time::Duration;
 
+use super::worker::Worker;
+
 pub(crate) struct Parker {
     inner: Arc<Inner>,
 }
@@ -63,8 +65,8 @@ impl Parker {
         }
     }
 
-    pub(crate) fn park(&mut self, handle: &driver::Handle) {
-        self.inner.park(handle);
+    pub(crate) fn park(&mut self, handle: &driver::Handle, worker: &Worker) {
+        self.inner.park(handle, worker);
     }
 
     pub(crate) fn park_timeout(&mut self, handle: &driver::Handle, duration: Duration) {
@@ -102,7 +104,7 @@ impl Unparker {
 
 impl Inner {
     /// Parks the current thread for at most `dur`.
-    fn park(&self, handle: &driver::Handle) {
+    fn park(&self, handle: &driver::Handle, worker: &Worker) {
         // If we were previously notified then we consume this notification and
         // return quickly.
         if self
@@ -116,11 +118,11 @@ impl Inner {
         if let Some(mut driver) = self.shared.driver.try_lock() {
             self.park_driver(&mut driver, handle);
         } else {
-            self.park_condvar();
+            self.park_condvar(worker);
         }
     }
 
-    fn park_condvar(&self) {
+    fn park_condvar(&self, worker: &Worker) {
         // Otherwise we need to coordinate going to sleep
         let mut m = self.mutex.lock();
 
@@ -143,6 +145,7 @@ impl Inner {
             }
             Err(actual) => panic!("inconsistent park state; actual = {}", actual),
         }
+        worker.handle.shared.idle.dec_num_poll_driver();
 
         loop {
             m = self.condvar.wait(m).unwrap();
@@ -153,6 +156,7 @@ impl Inner {
                 .is_ok()
             {
                 // got a notification
+                worker.handle.shared.idle.inc_num_poll_driver();
                 return;
             }
 

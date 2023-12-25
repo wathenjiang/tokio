@@ -13,6 +13,9 @@ pub(super) struct Idle {
     /// Used as a fast-path to avoid acquiring the lock when needed.
     state: AtomicUsize,
 
+    /// Number of threads remaining available for poll Driver
+    num_poll_driver_threads: AtomicUsize,
+
     /// Total number of workers.
     num_workers: usize,
 }
@@ -36,6 +39,7 @@ impl Idle {
 
         let idle = Idle {
             state: AtomicUsize::new(init.into()),
+            num_poll_driver_threads: AtomicUsize::new(num_workers),
             num_workers,
         };
 
@@ -152,7 +156,21 @@ impl Idle {
 
     fn notify_should_wakeup(&self) -> bool {
         let state = State(self.state.fetch_add(0, SeqCst));
-        state.num_searching() == 0 && state.num_unparked() < self.num_workers
+        self.num_poll_driver() == 0
+            || (state.num_searching() == 0 && state.num_unparked() < self.num_workers)
+    }
+
+    pub(super) fn num_poll_driver(&self) -> usize {
+        self.num_poll_driver_threads.fetch_sub(0, SeqCst)
+    }
+
+    /// Returns if there is no more threads to poll driver
+    pub(super) fn dec_num_poll_driver(&self) -> bool {
+        self.num_poll_driver_threads.fetch_sub(1, SeqCst) == 1
+    }
+
+    pub(super) fn inc_num_poll_driver(&self) {
+        self.num_poll_driver_threads.fetch_add(1, SeqCst);
     }
 }
 
