@@ -944,6 +944,7 @@ impl Core {
         true
     }
 
+    /// Runs maintenance work such as checking the pool's state.
     fn maintenance(&mut self, worker: &Worker) {
         self.stats
             .submit(&worker.handle.shared.worker_metrics[worker.index]);
@@ -1116,9 +1117,11 @@ impl Handle {
         }
     }
 
-    fn notify_parked_remote(&self) {
+    pub(super) fn notify_parked_remote(&self) {
         if let Some(index) = self.shared.idle.worker_to_notify(&self.shared) {
             self.shared.remotes[index].unpark.unpark(&self.driver);
+        }else{
+            println!("no thread waken here");
         }
     }
 

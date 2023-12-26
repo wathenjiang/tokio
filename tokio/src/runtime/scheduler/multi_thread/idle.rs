@@ -161,7 +161,7 @@ impl Idle {
     }
 
     pub(super) fn num_poll_driver(&self) -> usize {
-        self.num_poll_driver_threads.fetch_sub(0, SeqCst)
+        self.num_poll_driver_threads.load(SeqCst)
     }
 
     /// Returns if there is no more threads to poll driver

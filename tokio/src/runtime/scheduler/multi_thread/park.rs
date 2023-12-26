@@ -126,6 +126,19 @@ impl Inner {
         // Otherwise we need to coordinate going to sleep
         let mut m = self.mutex.lock();
 
+        struct NumGuard<'a>{
+            worker: &'a Worker
+        }
+        impl<'a> Drop for NumGuard<'a>{
+            fn drop(&mut self) {
+                self.worker.handle.shared.idle.inc_num_poll_driver();
+            }
+        }
+        let _guard = NumGuard{worker};
+        // There are no worker thread to poll driver, so we quickly return here.
+        worker.handle.shared.idle.dec_num_poll_driver();
+
+
         match self
             .state
             .compare_exchange(EMPTY, PARKED_CONDVAR, SeqCst, SeqCst)
@@ -145,7 +158,6 @@ impl Inner {
             }
             Err(actual) => panic!("inconsistent park state; actual = {}", actual),
         }
-        worker.handle.shared.idle.dec_num_poll_driver();
 
         loop {
             m = self.condvar.wait(m).unwrap();
@@ -156,7 +168,6 @@ impl Inner {
                 .is_ok()
             {
                 // got a notification
-                worker.handle.shared.idle.inc_num_poll_driver();
                 return;
             }
 
