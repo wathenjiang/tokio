@@ -1120,8 +1120,6 @@ impl Handle {
     pub(super) fn notify_parked_remote(&self) {
         if let Some(index) = self.shared.idle.worker_to_notify(&self.shared) {
             self.shared.remotes[index].unpark.unpark(&self.driver);
-        }else{
-            println!("no thread waken here");
         }
     }
 

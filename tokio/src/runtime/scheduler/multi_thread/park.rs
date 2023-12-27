@@ -136,7 +136,9 @@ impl Inner {
         }
         let _guard = NumGuard{worker};
         // There are no worker thread to poll driver, so we quickly return here.
-        worker.handle.shared.idle.dec_num_poll_driver();
+        if worker.handle.shared.idle.dec_num_poll_driver(){
+            return;
+        }
 
 
         match self
