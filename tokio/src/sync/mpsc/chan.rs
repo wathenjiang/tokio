@@ -8,6 +8,7 @@ use crate::sync::mpsc::{bounded, list, unbounded};
 use crate::sync::notify::Notify;
 use crate::util::cacheline::CachePadded;
 
+use std::cell::RefCell;
 use std::fmt;
 use std::process;
 use std::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed, Release};
@@ -48,6 +49,36 @@ pub(crate) trait Semaphore {
     fn is_closed(&self) -> bool;
 }
 
+thread_local! {
+    static TX_COUNT: RefCell<usize> = RefCell::new(0);
+    static RX_WAKER_COUNT: RefCell<usize> = RefCell::new(0);
+    static NOTIFY_RX_CLOSED_COUNT: RefCell<usize> = RefCell::new(0);
+    static SEMAPHORE_COUNT: RefCell<usize> = RefCell::new(0);
+    static TX_COUNT_COUNT: RefCell<usize> = RefCell::new(0);
+    static RX_FIELDS_COUNT: RefCell<usize> = RefCell::new(0);
+}
+
+fn println_thread_local_count(){
+    let tx_count = TX_COUNT.with(|count| *count.borrow());
+    let rx_waker_count = RX_WAKER_COUNT.with(|count| *count.borrow());
+    let notify_rx_closed_count = NOTIFY_RX_CLOSED_COUNT.with(|count| *count.borrow());
+    let semaphore_count = SEMAPHORE_COUNT.with(|count| *count.borrow());
+    let tx_count_count = TX_COUNT_COUNT.with(|count| *count.borrow());
+    let rx_fields_count = RX_FIELDS_COUNT.with(|count| *count.borrow());
+    let _thread_id = std::thread::current().id();
+
+    // println!(
+    //     "thread_id {:?}, tx_count {}, rx_waker_count {}, notify_rx_closed_count {}, semaphore_count {}, tx_count_count {}, rx_fields_count {}",
+    //     thread_id, tx_count, rx_waker_count, notify_rx_closed_count,semaphore_count,tx_count_count,rx_fields_count
+    // );
+
+    println!(
+        "{} {} {} {} {} {}",
+        tx_count, rx_waker_count, notify_rx_closed_count,semaphore_count,tx_count_count,rx_fields_count
+    );
+}
+
+
 pub(super) struct Chan<T, S> {
     /// Handle to the push half of the lock-free list.
     tx: CachePadded<list::Tx<T>>,
@@ -68,6 +99,56 @@ pub(super) struct Chan<T, S> {
 
     /// Only accessed by `Rx` handle.
     rx_fields: UnsafeCell<RxFields<T>>,
+}
+
+impl<T, S> Chan<T, S> {
+    #[inline]
+    fn get_tx(&self) -> &list::Tx<T> {
+        TX_COUNT.with(|count| {
+            *count.borrow_mut() += 1;
+        });
+        &self.tx
+    }
+
+    #[inline]
+    fn get_rx_waker(&self) -> &AtomicWaker {
+        RX_WAKER_COUNT.with(|count| {
+            *count.borrow_mut() += 1;
+        });
+        &self.rx_waker
+    }
+
+    #[inline]
+    fn get_notify_rx_closed(&self) -> &Notify {
+        NOTIFY_RX_CLOSED_COUNT.with(|count| {
+            *count.borrow_mut() += 1;
+        });
+        &self.notify_rx_closed
+    }
+
+    #[inline]
+    fn get_semaphore(&self) -> &S {
+        SEMAPHORE_COUNT.with(|count| {
+            *count.borrow_mut() += 1;
+        });
+        &self.semaphore
+    }
+
+    #[inline]
+    fn get_tx_count(&self) -> &AtomicUsize {
+        TX_COUNT_COUNT.with(|count| {
+            *count.borrow_mut() += 1;
+        });
+        &self.tx_count
+    }
+
+    #[inline]
+    fn get_rx_fields(&self) -> &UnsafeCell<RxFields<T>> {
+        RX_FIELDS_COUNT.with(|count| {
+            *count.borrow_mut() += 1;
+        });
+        &self.rx_fields
+    }
 }
 
 impl<T, S> fmt::Debug for Chan<T, S>
@@ -137,7 +218,7 @@ impl<T, S> Tx<T, S> {
 
     // Returns the upgraded channel or None if the upgrade failed.
     pub(super) fn upgrade(chan: Arc<Chan<T, S>>) -> Option<Self> {
-        let mut tx_count = chan.tx_count.load(Acquire);
+        let mut tx_count = chan.get_tx_count().load(Acquire);
 
         loop {
             if tx_count == 0 {
@@ -146,7 +227,7 @@ impl<T, S> Tx<T, S> {
             }
 
             match chan
-                .tx_count
+                .get_tx_count()
                 .compare_exchange_weak(tx_count, tx_count + 1, AcqRel, Acquire)
             {
                 Ok(_) => return Some(Tx { inner: chan }),
@@ -156,7 +237,7 @@ impl<T, S> Tx<T, S> {
     }
 
     pub(super) fn semaphore(&self) -> &S {
-        &self.inner.semaphore
+        &self.inner.get_semaphore()
     }
 
     /// Send a message and notify the receiver.
@@ -166,7 +247,7 @@ impl<T, S> Tx<T, S> {
 
     /// Wake the receive half
     pub(crate) fn wake_rx(&self) {
-        self.inner.rx_waker.wake();
+        self.inner.get_rx_waker().wake();
     }
 
     /// Returns `true` if senders belong to the same channel.
@@ -177,16 +258,16 @@ impl<T, S> Tx<T, S> {
 
 impl<T, S: Semaphore> Tx<T, S> {
     pub(crate) fn is_closed(&self) -> bool {
-        self.inner.semaphore.is_closed()
+        self.inner.get_semaphore().is_closed()
     }
 
     pub(crate) async fn closed(&self) {
         // In order to avoid a race condition, we first request a notification,
         // **then** check whether the semaphore is closed. If the semaphore is
         // closed the notification request is dropped.
-        let notified = self.inner.notify_rx_closed.notified();
+        let notified = self.inner.get_notify_rx_closed().notified();
 
-        if self.inner.semaphore.is_closed() {
+        if self.inner.get_semaphore().is_closed() {
             return;
         }
         notified.await;
@@ -197,7 +278,7 @@ impl<T, S> Clone for Tx<T, S> {
     fn clone(&self) -> Tx<T, S> {
         // Using a Relaxed ordering here is sufficient as the caller holds a
         // strong ref to `self`, preventing a concurrent decrement to zero.
-        self.inner.tx_count.fetch_add(1, Relaxed);
+        self.inner.get_tx_count().fetch_add(1, Relaxed);
 
         Tx {
             inner: self.inner.clone(),
@@ -207,12 +288,13 @@ impl<T, S> Clone for Tx<T, S> {
 
 impl<T, S> Drop for Tx<T, S> {
     fn drop(&mut self) {
-        if self.inner.tx_count.fetch_sub(1, AcqRel) != 1 {
+        println_thread_local_count();        
+        if self.inner.get_tx_count().fetch_sub(1, AcqRel) != 1 {
             return;
         }
 
         // Close the list, which sends a `Close` message
-        self.inner.tx.close();
+        self.inner.get_tx().close();
 
         // Notify the receiver
         self.wake_rx();
@@ -227,7 +309,7 @@ impl<T, S: Semaphore> Rx<T, S> {
     }
 
     pub(crate) fn close(&mut self) {
-        self.inner.rx_fields.with_mut(|rx_fields_ptr| {
+        self.inner.get_rx_fields().with_mut(|rx_fields_ptr| {
             let rx_fields = unsafe { &mut *rx_fields_ptr };
 
             if rx_fields.rx_closed {
@@ -237,8 +319,8 @@ impl<T, S: Semaphore> Rx<T, S> {
             rx_fields.rx_closed = true;
         });
 
-        self.inner.semaphore.close();
-        self.inner.notify_rx_closed.notify_waiters();
+        self.inner.get_semaphore().close();
+        self.inner.get_notify_rx_closed().notify_waiters();
     }
 
     /// Receive the next value
@@ -250,7 +332,7 @@ impl<T, S: Semaphore> Rx<T, S> {
         // Keep track of task budget
         let coop = ready!(crate::runtime::coop::poll_proceed(cx));
 
-        self.inner.rx_fields.with_mut(|rx_fields_ptr| {
+        self.inner.get_rx_fields().with_mut(|rx_fields_ptr| {
             let rx_fields = unsafe { &mut *rx_fields_ptr };
 
             macro_rules! try_recv {
@@ -279,14 +361,14 @@ impl<T, S: Semaphore> Rx<T, S> {
 
             try_recv!();
 
-            self.inner.rx_waker.register_by_ref(cx.waker());
+            self.inner.get_rx_waker().register_by_ref(cx.waker());
 
             // It is possible that a value was pushed between attempting to read
             // and registering the task, so we have to check the channel a
             // second time here.
             try_recv!();
 
-            if rx_fields.rx_closed && self.inner.semaphore.is_idle() {
+            if rx_fields.rx_closed && self.inner.get_semaphore().is_idle() {
                 coop.made_progress();
                 Ready(None)
             } else {
@@ -320,7 +402,7 @@ impl<T, S: Semaphore> Rx<T, S> {
         let mut remaining = limit;
         let initial_length = buffer.len();
 
-        self.inner.rx_fields.with_mut(|rx_fields_ptr| {
+        self.inner.get_rx_fields().with_mut(|rx_fields_ptr| {
             let rx_fields = unsafe { &mut *rx_fields_ptr };
             macro_rules! try_recv {
                 () => {
@@ -363,14 +445,14 @@ impl<T, S: Semaphore> Rx<T, S> {
 
             try_recv!();
 
-            self.inner.rx_waker.register_by_ref(cx.waker());
+            self.inner.get_rx_waker().register_by_ref(cx.waker());
 
             // It is possible that a value was pushed between attempting to read
             // and registering the task, so we have to check the channel a
             // second time here.
             try_recv!();
 
-            if rx_fields.rx_closed && self.inner.semaphore.is_idle() {
+            if rx_fields.rx_closed && self.inner.get_semaphore().is_idle() {
                 assert!(buffer.is_empty());
                 coop.made_progress();
                 Ready(0usize)
@@ -384,7 +466,7 @@ impl<T, S: Semaphore> Rx<T, S> {
     pub(crate) fn try_recv(&mut self) -> Result<T, TryRecvError> {
         use super::list::TryPopResult;
 
-        self.inner.rx_fields.with_mut(|rx_fields_ptr| {
+        self.inner.get_rx_fields().with_mut(|rx_fields_ptr| {
             let rx_fields = unsafe { &mut *rx_fields_ptr };
 
             macro_rules! try_recv {
@@ -410,13 +492,13 @@ impl<T, S: Semaphore> Rx<T, S> {
             // This is not a spurious wakeup to `poll_recv` since we just got a
             // Busy from `try_pop`, which only happens if there are messages in
             // the queue.
-            self.inner.rx_waker.wake();
+            self.inner.get_rx_waker().wake();
 
             // Park the thread until the problematic send has completed.
             let mut park = CachedParkThread::new();
             let waker = park.waker().unwrap();
             loop {
-                self.inner.rx_waker.register_by_ref(&waker);
+                self.inner.get_rx_waker().register_by_ref(&waker);
                 // It is possible that the problematic send has now completed,
                 // so we have to check for messages again.
                 try_recv!();
@@ -432,13 +514,15 @@ impl<T, S: Semaphore> Drop for Rx<T, S> {
 
         self.close();
 
-        self.inner.rx_fields.with_mut(|rx_fields_ptr| {
+        self.inner.get_rx_fields().with_mut(|rx_fields_ptr| {
             let rx_fields = unsafe { &mut *rx_fields_ptr };
 
-            while let Some(Value(_)) = rx_fields.list.pop(&self.inner.tx) {
-                self.inner.semaphore.add_permit();
+            while let Some(Value(_)) = rx_fields.list.pop(&self.inner.get_tx()) {
+                self.inner.get_semaphore().add_permit();
             }
         });
+
+        println_thread_local_count();
     }
 }
 
@@ -447,10 +531,10 @@ impl<T, S: Semaphore> Drop for Rx<T, S> {
 impl<T, S> Chan<T, S> {
     fn send(&self, value: T) {
         // Push the value
-        self.tx.push(value);
+        self.get_tx().push(value);
 
         // Notify the rx task
-        self.rx_waker.wake();
+        self.get_rx_waker().wake();
     }
 }
 
@@ -460,10 +544,10 @@ impl<T, S> Drop for Chan<T, S> {
 
         // Safety: the only owner of the rx fields is Chan, and being
         // inside its own Drop means we're the last ones to touch it.
-        self.rx_fields.with_mut(|rx_fields_ptr| {
+        self.get_rx_fields().with_mut(|rx_fields_ptr| {
             let rx_fields = unsafe { &mut *rx_fields_ptr };
 
-            while let Some(Value(_)) = rx_fields.list.pop(&self.tx) {}
+            while let Some(Value(_)) = rx_fields.list.pop(&self.get_tx()) {}
             unsafe { rx_fields.list.free_blocks() };
         });
     }
