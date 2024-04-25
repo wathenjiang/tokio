@@ -509,6 +509,12 @@ impl TimerEntry {
         // We need to perform an acq/rel fence with the driver thread, and the
         // simplest way to do so is to grab the driver lock.
         //
+        if self.registered{
+            return;
+        }
+        if !self.registered{
+            return;
+        }
         // Why is this necessary? We're about to release this timer's memory for
         // some other non-timer use. However, we've been doing a bunch of
         // relaxed (or even non-atomic) writes from the driver thread, and we'll
