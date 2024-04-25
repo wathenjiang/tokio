@@ -534,7 +534,7 @@ impl TimerEntry {
         // driver did so far and happens-before everything the driver does in
         // the future. While we have the lock held, we also go ahead and
         // deregister the entry if necessary.
-        unsafe { self.driver().clear_entry(NonNull::from(self.inner())) };
+        // unsafe { self.driver().clear_entry(NonNull::from(self.inner())) };
     }
 
     pub(crate) fn reset(mut self: Pin<&mut Self>, new_time: Instant, reregister: bool) {
