@@ -228,6 +228,8 @@ impl Wheel {
         // those entries again or we'll end up in an infinite loop.
         let mut entries = self.take_entries(expiration);
 
+        let mut count = 0;
+
         while let Some(item) = entries.pop_back() {
             if expiration.level == 0 {
                 debug_assert_eq!(unsafe { item.cached_when() }, expiration.deadline);
@@ -239,6 +241,10 @@ impl Wheel {
                 Ok(()) => {
                     // Item was expired
                     self.pending.push_front(item);
+                    count += 1;
+                    if count >= 32 {
+                        break; // test: timer batch poll might be benifit for cache
+                    }
                 }
                 Err(expiration_tick) => {
                     let level = level_for(expiration.deadline, expiration_tick);
