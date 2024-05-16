@@ -452,6 +452,12 @@ impl TimerShared {
     pub(super) fn shard_id(&self) -> u32 {
         self.shard_id
     }
+
+    /// Checks if is been waken
+    pub(super) fn is_waken(&self) -> bool{
+        self.state.waker.take_waker().is_none()
+    }
+    
 }
 
 unsafe impl linked_list::Link for TimerShared {

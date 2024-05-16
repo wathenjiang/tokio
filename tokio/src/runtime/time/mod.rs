@@ -319,6 +319,9 @@ impl Handle {
     /// SAFETY: The timer must not be registered with some other driver, and
     /// `add_entry` must not be called concurrently.
     pub(self) unsafe fn clear_entry(&self, entry: NonNull<TimerShared>) {
+        if !entry.as_ref().is_waken() {
+            return;
+        }
         unsafe {
             let mut lock = self.inner.lock_sharded_wheel(entry.as_ref().shard_id());
 
