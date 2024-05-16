@@ -214,7 +214,7 @@ impl StateCell {
         // firing the timer can only happen with the driver lock held, we know
         // we shouldn't be able to "miss" a transition to a fired state, even
         // with relaxed ordering.
-        let cur_state = self.state.load(Ordering::Relaxed);
+        let cur_state = self.state.load(Ordering::Acquire);
         if cur_state == STATE_DEREGISTERED {
             return None;
         }
@@ -274,7 +274,7 @@ impl StateCell {
     /// ordering, but is conservative - if it returns false, the timer is
     /// definitely _not_ registered.
     pub(super) fn might_be_registered(&self) -> bool {
-        self.state.load(Ordering::Relaxed) != u64::MAX
+        self.state.load(Ordering::Acquire) != u64::MAX
     }
 }
 
