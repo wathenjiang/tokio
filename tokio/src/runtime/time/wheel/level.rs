@@ -63,7 +63,6 @@ impl Level {
         // of `now` (`level_range` is a power of 2).
         let level_start = now & !(level_range - 1);
         let mut deadline = level_start + slot as u64 * slot_range;
-
         if deadline <= now {
             // A timer is in a slot "prior" to the current time. This can occur
             // because we do not have an infinite hierarchy of timer levels, and
@@ -81,12 +80,11 @@ impl Level {
             // pseudo-ring buffer, and we rotate around them indefinitely. If we
             // compute a deadline before now, and it's the top level, it
             // therefore means we're actually looking at a slot in the future.
-            debug_assert_eq!(self.level, super::NUM_LEVELS - 1);
+            // debug_assert_eq!(self.level, super::NUM_LEVELS - 1);
 
             deadline += level_range;
         }
-
-        debug_assert!(
+        assert!(
             deadline >= now,
             "deadline={:016X}; now={:016X}; level={}; lr={:016X}, sr={:016X}, slot={}; occupied={:b}",
             deadline,
@@ -121,7 +119,6 @@ impl Level {
 
     pub(crate) unsafe fn add_entry(&mut self, item: TimerHandle) {
         let slot = slot_for(item.cached_when(), self.level);
-
         self.slot[slot].push_front(item);
 
         self.occupied |= occupied_bit(slot);
@@ -140,10 +137,16 @@ impl Level {
         }
     }
 
-    pub(crate) fn take_slot(&mut self, slot: usize) -> EntryList {
-        self.occupied &= !occupied_bit(slot);
+    pub(super) fn get_mut_entries(&mut self, slot: usize) -> &mut EntryList {
+        &mut self.slot[slot]
+    }
 
-        std::mem::take(&mut self.slot[slot])
+    pub(super) fn occupied_bit_maintain(&mut self, slot: usize) {
+        if self.slot[slot].is_empty() {
+            self.occupied &= !occupied_bit(slot);
+        } else {
+            self.occupied |= occupied_bit(slot);
+        }
     }
 }
 

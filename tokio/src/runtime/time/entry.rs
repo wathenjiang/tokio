@@ -65,14 +65,15 @@ use crate::time::Instant;
 use crate::util::linked_list;
 
 use std::cell::UnsafeCell as StdUnsafeCell;
+use std::sync::atomic::AtomicBool;
 use std::task::{Context, Poll, Waker};
 use std::{marker::PhantomPinned, pin::Pin, ptr::NonNull};
 
 type TimerResult = Result<(), crate::time::error::Error>;
 
 const STATE_DEREGISTERED: u64 = u64::MAX;
-const STATE_PENDING_FIRE: u64 = STATE_DEREGISTERED - 1;
-const STATE_MIN_VALUE: u64 = STATE_PENDING_FIRE;
+const STATE_FIRING: u64 = STATE_DEREGISTERED - 1;
+const STATE_MIN_VALUE: u64 = STATE_FIRING;
 /// The largest safe integer to use for ticks.
 ///
 /// This value should be updated if any other signal values are added above.
@@ -100,6 +101,8 @@ pub(super) struct StateCell {
     result: UnsafeCell<TimerResult>,
     /// The currently-registered waker
     waker: AtomicWaker,
+    /// Whether this timer is in the overflow entry list.
+    overflow: AtomicBool,
 }
 
 impl Default for StateCell {
@@ -120,11 +123,8 @@ impl StateCell {
             state: AtomicU64::new(STATE_DEREGISTERED),
             result: UnsafeCell::new(Ok(())),
             waker: AtomicWaker::new(),
+            overflow: AtomicBool::new(false),
         }
-    }
-
-    fn is_pending(&self) -> bool {
-        self.state.load(Ordering::Relaxed) == STATE_PENDING_FIRE
     }
 
     /// Returns the current expiration time, or None if not currently scheduled.
@@ -162,14 +162,13 @@ impl StateCell {
         }
     }
 
-    /// Marks this timer as being moved to the pending list, if its scheduled
-    /// time is not after `not_after`.
+    /// Marks this timer firing, if its scheduled time is not after `not_after`.
     ///
     /// If the timer is scheduled for a time after `not_after`, returns an Err
     /// containing the current scheduled time.
     ///
     /// SAFETY: Must hold the driver lock.
-    unsafe fn mark_pending(&self, not_after: u64) -> Result<(), u64> {
+    unsafe fn mark_firing(&self, not_after: u64) -> Result<(), u64> {
         // Quick initial debug check to see if the timer is already fired. Since
         // firing the timer can only happen with the driver lock held, we know
         // we shouldn't be able to "miss" a transition to a fired state, even
@@ -181,7 +180,7 @@ impl StateCell {
             // https://github.com/tokio-rs/tokio/issues/3675
             assert!(
                 cur_state < STATE_MIN_VALUE,
-                "mark_pending called when the timer entry is in an invalid state"
+                "mark_firing called when the timer entry is in an invalid state"
             );
 
             if cur_state > not_after {
@@ -190,7 +189,7 @@ impl StateCell {
 
             match self.state.compare_exchange_weak(
                 cur_state,
-                STATE_PENDING_FIRE,
+                STATE_FIRING,
                 Ordering::AcqRel,
                 Ordering::Acquire,
             ) {
@@ -447,6 +446,23 @@ impl TimerShared {
     pub(super) fn shard_id(&self) -> u32 {
         self.shard_id
     }
+
+    /// SAFETY: The driver lock must be held while invoking this function.
+    pub(super) unsafe fn overflow(&self) -> bool {
+        self.state.overflow.load(Ordering::Relaxed)
+    }
+
+    /// SAFETY: The driver lock must be held while invoking this function, and
+    /// the entry must be in the overflow linked list.
+    pub(super) unsafe fn mark_overflow(&self) {
+        self.state.overflow.store(true, Ordering::Relaxed);
+    }
+
+    /// SAFETY: The driver lock must be held while invoking this function, and
+    /// the entry must *not* be in the overflow linked list.
+    pub(super) unsafe fn unmark_overflow(&self) {
+        self.state.overflow.store(false, Ordering::Relaxed);
+    }
 }
 
 unsafe impl linked_list::Link for TimerShared {
@@ -598,10 +614,6 @@ impl TimerHandle {
         unsafe { self.inner.as_ref().sync_when() }
     }
 
-    pub(super) unsafe fn is_pending(&self) -> bool {
-        unsafe { self.inner.as_ref().state.is_pending() }
-    }
-
     /// Forcibly sets the true and cached expiration times to the given tick.
     ///
     /// SAFETY: The caller must ensure that the handle remains valid, the driver
@@ -610,7 +622,7 @@ impl TimerHandle {
         self.inner.as_ref().set_expiration(tick);
     }
 
-    /// Attempts to mark this entry as pending. If the expiration time is after
+    /// Attempts to mark this entry as firing. If the expiration time is after
     /// `not_after`, however, returns an Err with the current expiration time.
     ///
     /// If an `Err` is returned, the `cached_when` value will be updated to this
@@ -618,9 +630,8 @@ impl TimerHandle {
     ///
     /// SAFETY: The caller must ensure that the handle remains valid, the driver
     /// lock is held, and that the timer is not in any wheel linked lists.
-    /// After returning Ok, the entry must be added to the pending list.
-    pub(super) unsafe fn mark_pending(&self, not_after: u64) -> Result<(), u64> {
-        match self.inner.as_ref().state.mark_pending(not_after) {
+    pub(super) unsafe fn mark_firing(&self, not_after: u64) -> Result<(), u64> {
+        match self.inner.as_ref().state.mark_firing(not_after) {
             Ok(()) => {
                 // mark this as being on the pending queue in cached_when
                 self.inner.as_ref().set_cached_when(u64::MAX);
@@ -646,6 +657,18 @@ impl TimerHandle {
     /// the entry must not be in any wheel linked lists.
     pub(super) unsafe fn fire(self, completed_state: TimerResult) -> Option<Waker> {
         self.inner.as_ref().state.fire(completed_state)
+    }
+
+    /// SAFETY: The driver lock must be held while invoking this function, and
+    /// the entry must be in the overflow linked list.
+    pub(super) unsafe fn mark_overflow(&self) {
+        self.inner.as_ref().mark_overflow()
+    }
+
+    /// SAFETY: The driver lock must be held while invoking this function, and
+    /// the entry must *not* be in the overflow linked list.
+    pub(super) unsafe fn unmark_overflow(&self) {
+        self.inner.as_ref().unmark_overflow()
     }
 }
 

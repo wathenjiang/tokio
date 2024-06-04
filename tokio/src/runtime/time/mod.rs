@@ -319,26 +319,78 @@ impl Handle {
             now = lock.elapsed();
         }
 
-        while let Some(entry) = lock.poll(now) {
-            debug_assert!(unsafe { entry.is_pending() });
+        while let Some(expiration) = lock.poll(now) {
+            lock.try_set_elapsed(expiration.deadline);
+            let elapsed = lock.elapsed();
+            while let Some(entry) = lock.get_mut_entries(&expiration).pop_back() {
+                // Try to expire the entry; this is cheap (doesn't synchronize) if
+                // the timer is not expired, and updates cached_when.
+                match unsafe { entry.mark_firing(elapsed) } {
+                    Ok(()) => {
+                        // Entry was expired.
+                        // SAFETY: We hold the driver lock, and just removed the entry from any linked lists.
+                        if let Some(waker) = unsafe { entry.fire(Ok(())) } {
+                            waker_list.push(waker);
 
-            // SAFETY: We hold the driver lock, and just removed the entry from any linked lists.
-            if let Some(waker) = unsafe { entry.fire(Ok(())) } {
-                waker_list.push(waker);
+                            if !waker_list.can_push() {
+                                // Wake a batch of wakers. To avoid deadlock,
+                                // we must do this with the lock temporarily dropped.
+                                drop(lock);
+                                waker_list.wake_all();
 
-                if !waker_list.can_push() {
-                    // Wake a batch of wakers. To avoid deadlock, we must do this with the lock temporarily dropped.
-                    drop(lock);
+                                lock = self.inner.lock_sharded_wheel(id);
+                            }
+                        }
+                    }
+                    Err(expiration_tick) => {
+                        lock.reinsert(entry, elapsed, expiration_tick);
+                    }
+                }
+            }
+            lock.occupied_bit_maintain(&expiration);
+        }
+        // Polls the overflow entrylist. The overflow entrylist stores more than MAX_DURATION timers.
+        if let Some(overflow_when) = lock.next_overflow_expiration() {
+            if overflow_when <= now {
+                lock.try_set_elapsed(overflow_when);
+                let elapsed = lock.elapsed();
+            
+                let mut traverse_limit = lock.get_overflow_count();
+                while let Some(entry) = lock.get_entry_from_overflow() {
+                    unsafe { entry.unmark_overflow() };
+                    // Try to expire the entry; this is cheap (doesn't synchronize) if
+                    // the timer is not expired, and updates cached_when.
+                    match unsafe { entry.mark_firing(elapsed) } {
+                        Ok(()) => {
+                            // Entry was expired.
+                            // SAFETY: We hold the driver lock, and just removed the entry from any linked lists.
+                            if let Some(waker) = unsafe { entry.fire(Ok(())) } {
+                                waker_list.push(waker);
 
-                    waker_list.wake_all();
+                                if !waker_list.can_push() {
+                                    // Wake a batch of wakers. To avoid deadlock,
+                                    // we must do this with the lock temporarily dropped.
+                                    drop(lock);
+                                    waker_list.wake_all();
 
-                    lock = self.inner.lock_sharded_wheel(id);
+                                    lock = self.inner.lock_sharded_wheel(id);
+                                }
+                            }
+                        }
+                        Err(expiration_tick) => {
+                            lock.reinsert(entry, elapsed, expiration_tick);
+                        }
+                    }
+                    traverse_limit -= 1;
+                    if traverse_limit == 0 {
+                        break;
+                    }
                 }
             }
         }
+        lock.increate_overflow_rount(now);
         let next_wake_up = lock.poll_at();
         drop(lock);
-
         waker_list.wake_all();
         next_wake_up
     }
